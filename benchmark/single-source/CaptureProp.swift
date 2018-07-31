@@ -10,6 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+import TestsUtils
+
+public let CaptureProp = BenchmarkInfo(
+  name: "CaptureProp",
+  runFunction: run_CaptureProp,
+  tags: [.validation, .api, .refcount])
+
 func sum(_ x:Int, y:Int) -> Int {
   return x + y
 }
@@ -17,7 +24,7 @@ func sum(_ x:Int, y:Int) -> Int {
 @inline(never)
 func benchCaptureProp<S : Sequence
 >(
-  _ s: S, _ f: (S.Iterator.Element, S.Iterator.Element) -> S.Iterator.Element) -> S.Iterator.Element {
+  _ s: S, _ f: (S.Element, S.Element) -> S.Element) -> S.Element {
 
   var it = s.makeIterator()
   let initial = it.next()!

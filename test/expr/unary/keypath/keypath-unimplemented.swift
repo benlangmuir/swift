@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -typecheck -verify %s
+// RUN: %target-typecheck-verify-swift
 
 struct A {
   subscript(x: Int) -> Int { return x }
@@ -7,12 +7,6 @@ struct A {
 
 class C {
   var i = 0
-}
-
-func unsupportedComponents() {
-  _ = \A.c?.i // expected-error{{key path support for optional chaining components is not implemented}}
-  _ = \A.c!.i // expected-error{{key path support for optional force-unwrapping components is not implemented}}
-  _ = \A.[0] // expected-error{{key path support for subscript components is not implemented}}
 }
 
 // rdar://problem/32209039 - Improve diagnostic when unsupported tuple element references are used in key path literals

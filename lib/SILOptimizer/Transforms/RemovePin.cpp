@@ -11,28 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "sil-remove-pins"
-
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/SIL/Dominance.h"
-#include "swift/SIL/SILArgument.h"
 #include "swift/SIL/SILBuilder.h"
-#include "swift/SIL/SILInstruction.h"
-#include "swift/SILOptimizer/Analysis/ARCAnalysis.h"
-#include "swift/SILOptimizer/Analysis/AliasAnalysis.h"
-#include "swift/SILOptimizer/Analysis/Analysis.h"
-#include "swift/SILOptimizer/Analysis/ArraySemantic.h"
-#include "swift/SILOptimizer/Analysis/LoopAnalysis.h"
-#include "swift/SILOptimizer/Analysis/RCIdentityAnalysis.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
-#include "swift/SILOptimizer/Utils/CFG.h"
-#include "swift/SILOptimizer/Utils/Local.h"
-#include "swift/SILOptimizer/Utils/SILSSAUpdater.h"
-#include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/SmallPtrSet.h"
+#include "swift/SILOptimizer/Analysis/ARCAnalysis.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
-
 STATISTIC(NumPinPairsRemoved, "Number of pin pairs removed");
 
 using namespace swift;
@@ -40,10 +24,9 @@ using namespace swift;
 /// \brief Can this instruction read the pinned bit of the reference count.
 /// Reading the pinned prevents us from moving the pin instructions across it.
 static bool mayReadPinFlag(SILInstruction *I) {
-  auto Kind = I->getKind();
-  if (Kind == ValueKind::IsUniqueOrPinnedInst)
+  if (isa<IsUniqueOrPinnedInst>(I))
     return true;
-  if (Kind != ValueKind::ApplyInst)
+  if (!isa<ApplyInst>(I))
     return false;
   if (!I->mayReadFromMemory())
     return false;
@@ -58,7 +41,7 @@ class RemovePinInsts : public SILFunctionTransform {
 
   /// The set of currently available pins that have not been invalidate by an
   /// instruction that mayRelease memory.
-  llvm::SmallPtrSet<SILInstruction *, 16> AvailablePins;
+  llvm::SmallPtrSet<StrongPinInst *, 16> AvailablePins;
 
   AliasAnalysis *AA;
 
@@ -71,8 +54,8 @@ public:
     AA = PM->getAnalysis<AliasAnalysis>();
     RCIA = PM->getAnalysis<RCIdentityAnalysis>()->get(getFunction());
 
-    DEBUG(llvm::dbgs() << "*** Running Pin Removal on "
-                       << getFunction()->getName() << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "*** Running Pin Removal on "
+                            << getFunction()->getName() << "\n");
 
     bool Changed = false;
     for (auto &BB : *getFunction()) {
@@ -80,32 +63,34 @@ public:
       // This is only a BB local analysis for now.
       AvailablePins.clear();
 
-      DEBUG(llvm::dbgs() << "Visiting new BB!\n");
+      LLVM_DEBUG(llvm::dbgs() << "Visiting new BB!\n");
 
       for (auto InstIt = BB.begin(), End = BB.end(); InstIt != End; ) {
         auto *CurInst = &*InstIt;
         ++InstIt;
 
-        DEBUG(llvm::dbgs() << "    Visiting: " << *CurInst);
+        LLVM_DEBUG(llvm::dbgs() << "    Visiting: " << *CurInst);
 
         // Add StrongPinInst to available pins.
-        if (isa<StrongPinInst>(CurInst)) {
-          DEBUG(llvm::dbgs() << "        Found pin!\n");
-          AvailablePins.insert(CurInst);
+        if (auto pin = dyn_cast<StrongPinInst>(CurInst)) {
+          LLVM_DEBUG(llvm::dbgs() << "        Found pin!\n");
+          AvailablePins.insert(pin);
           continue;
         }
 
         // Try to remove StrongUnpinInst if its input is available.
         if (auto *Unpin = dyn_cast<StrongUnpinInst>(CurInst)) {
-          DEBUG(llvm::dbgs() << "        Found unpin!\n");
+          LLVM_DEBUG(llvm::dbgs() << "        Found unpin!\n");
           SILValue RCId = RCIA->getRCIdentityRoot(Unpin->getOperand());
-          DEBUG(llvm::dbgs() << "        RCID Source: " << *RCId);
+          LLVM_DEBUG(llvm::dbgs() << "        RCID Source: " << *RCId);
           auto *PinDef = dyn_cast<StrongPinInst>(RCId);
           if (PinDef && AvailablePins.count(PinDef)) {
-            DEBUG(llvm::dbgs() << "        Found matching pin: " << *PinDef);
+            LLVM_DEBUG(llvm::dbgs() << "        Found matching pin: "
+                                    << *PinDef);
             SmallVector<MarkDependenceInst *, 8> MarkDependentInsts;
             if (areSafePinUsers(PinDef, Unpin, MarkDependentInsts)) {
-              DEBUG(llvm::dbgs() << "        Pin users are safe! Removing!\n");
+              LLVM_DEBUG(llvm::dbgs() << "        Pin users are safe! "
+                                         "Removing!\n");
               Changed = true;
               auto *Enum = SILBuilder(PinDef).createOptionalSome(
                   PinDef->getLoc(), PinDef->getOperand(), PinDef->getType());
@@ -116,13 +101,13 @@ public:
               AvailablePins.erase(PinDef);
               ++NumPinPairsRemoved;
             } else {
-              DEBUG(llvm::dbgs()
-                    << "        Pin users are not safe! Cannot remove!\n");
+              LLVM_DEBUG(llvm::dbgs()
+                         << "        Pin users are not safe! Cannot remove!\n");
             }
 
             continue;
           } else {
-            DEBUG(llvm::dbgs() << "        Failed to find matching pin!\n");
+            LLVM_DEBUG(llvm::dbgs() <<"        Failed to find matching pin!\n");
           }
           // Otherwise, fall through. An unpin, through destruction of an object
           // can have arbitrary sideeffects.
@@ -146,16 +131,16 @@ public:
         // of the callsite).
         if (isa<StrongReleaseInst>(CurInst) || isa<ReleaseValueInst>(CurInst)) {
           if (isReleaseEndOfGuaranteedSelfCallSequence(CurInst)) {
-            DEBUG(llvm::dbgs() << "        Ignoring exactly balanced "
-                                  "release.\n");
+            LLVM_DEBUG(llvm::dbgs() << "        Ignoring exactly balanced "
+                                       "release.\n");
             continue;
           }
         }
 
         // In all other cases check whether this could be a potentially
         // releasing instruction.
-        DEBUG(llvm::dbgs()
-              << "        Checking if this inst invalidates pins.\n");
+        LLVM_DEBUG(llvm::dbgs()
+                   << "        Checking if this inst invalidates pins.\n");
         invalidateAvailablePins(CurInst);
       }
     }
@@ -181,11 +166,19 @@ public:
 
     for (auto *U : Users) {
       // A mark_dependence is safe if it is marking a dependence on a base that
-      // is the strong_pinned value.
+      // is the strong_pinned value:
+      //    %0 = strong_pin ...
+      //    %1 = mark_dependence ... on %0
+      // or
+      //    %0 = strong_pin ...
+      //    %1 = foo ... %0 ...
+      //    %2 = mark_dependence ... on %1
       if (auto *MD = dyn_cast<MarkDependenceInst>(U))
         if (Pin == MD->getBase() ||
-            std::find(Users.begin(), Users.end(), MD->getBase()) !=
-                Users.end()) {
+            std::find_if(Users.begin(), Users.end(),
+                         [&](SILInstruction *I) {
+                           return MD->getBase()->getDefiningInstruction() == I;
+                         }) != Users.end()) {
           MarkDeps.push_back(MD);
           continue;
         }
@@ -236,7 +229,7 @@ public:
     // TODO: We already created an ArraySemanticsCall in
     // isSafeArraySemanticFunction. I wonder if we can refactor into a third
     // method that takes an array semantic call. Then we can reuse the work.
-    ArraySemanticsCall Call(I);
+    ArraySemanticsCall Call(cast<ApplyInst>(I));
 
     // If our call does not have guaranteed self, bail.
     if (!Call.hasGuaranteedSelf())
@@ -249,7 +242,7 @@ public:
   /// Removes available pins that could be released by executing of 'I'.
   void invalidateAvailablePins(SILInstruction *I) {
     // Collect pins that we have to clear because they might have been released.
-    SmallVector<SILInstruction *, 16> RemovePin;
+    SmallVector<StrongPinInst *, 16> RemovePin;
     for (auto *P : AvailablePins) {
       if (!isSafeArraySemanticFunction(I) &&
           (mayDecrementRefCount(I, P, AA) ||
@@ -258,12 +251,12 @@ public:
     }
 
     if (RemovePin.empty()) {
-      DEBUG(llvm::dbgs() << "        No pins to invalidate!\n");
+      LLVM_DEBUG(llvm::dbgs() << "        No pins to invalidate!\n");
       return;
     }
 
     for (auto *P : RemovePin) {
-      DEBUG(llvm::dbgs() << "        Invalidating Pin: " << *P);
+      LLVM_DEBUG(llvm::dbgs() << "        Invalidating Pin: " << *P);
       AvailablePins.erase(P);
     }
   }

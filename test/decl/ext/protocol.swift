@@ -207,7 +207,7 @@ struct S4d : P4 {
 }
 
 extension P4 where Self.AssocP4 == Int {
-  func extP4Int() { }
+  func extP4Int() { } // expected-note {{candidate requires that the types 'Bool' and 'Int' be equivalent (requirement specified as 'Self.AssocP4' == 'Int')}}
 }
 
 extension P4 where Self.AssocP4 == Bool {
@@ -221,7 +221,7 @@ func testP4(_ s4a: S4a, s4b: S4b, s4c: S4c, s4d: S4d) {
   s4c.extP4Int() // okay
   var b1 = s4d.extP4a() // okay, "Bool" version
   b1 = true // checks type above
-  s4d.extP4Int() // expected-error{{'Bool' is not convertible to 'Int'}}
+  s4d.extP4Int() // expected-error{{value of type 'S4d' has no member 'extP4Int'}}
   _ = b1
 }
 
@@ -236,6 +236,8 @@ protocol ConformedProtocol {
 
 class BaseWithAlias<T> : ConformedProtocol {
   typealias ConcreteAlias = T
+
+  struct NestedNominal {}
 
   func baseMethod(_: T) {}
 }
@@ -260,6 +262,24 @@ extension ExtendedProtocol where Self : DerivedWithAlias {
 
   func f3(x: AbstractConformanceAlias) {
     let _: DerivedWithAlias = x
+  }
+
+  func f4(x: NestedNominal) {}
+}
+
+// rdar://problem/21991470 & https://bugs.swift.org/browse/SR-5022
+class NonPolymorphicInit {
+  init() { } // expected-note {{selected non-required initializer 'init()'}}
+}
+
+protocol EmptyProtocol { }
+
+// The diagnostic is not very accurate, but at least we reject this.
+
+extension EmptyProtocol where Self : NonPolymorphicInit {
+  init(string: String) {
+    self.init()
+    // expected-error@-1 {{constructing an object of class type 'Self' with a metatype value must use a 'required' initializer}}
   }
 }
 
@@ -531,7 +551,7 @@ func testSConforms8b() {
 }
 
 struct SConforms8c : PConforms8 { 
-  func method() -> String { return "" }
+  func method() -> String { return "" } // no warning in type definition
 }
 
 func testSConforms8c() {
@@ -921,9 +941,10 @@ extension BadProto1 {
   }
 }
 
+// rdar://problem/20756244
 protocol BadProto3 { }
 typealias BadProto4 = BadProto3
-extension BadProto4 { } // expected-error{{protocol 'BadProto3' in the module being compiled cannot be extended via a type alias}}{{11-20=BadProto3}}
+extension BadProto4 { } // okay
 
 typealias RawRepresentableAlias = RawRepresentable
 extension RawRepresentableAlias { } // okay
@@ -948,6 +969,63 @@ class BadClass5 : BadProto5 {} // expected-error{{type 'BadClass5' does not conf
 typealias A = BadProto1
 typealias B = BadProto1
 
-extension A & B { // expected-error{{protocol 'BadProto1' in the module being compiled cannot be extended via a type alias}}
+extension A & B { // okay
 
+}
+
+// Suppress near-miss warning for unlabeled initializers.
+protocol P9 {
+  init(_: Int)
+  init(_: Double)
+}
+
+extension P9 {
+  init(_ i: Int) {
+    self.init(Double(i))
+  }
+}
+
+struct X9 : P9 {
+  init(_: Float) { }
+}
+
+extension X9 {
+  init(_: Double) { }
+}
+
+// Suppress near-miss warning for unlabeled subscripts.
+protocol P10 {
+  subscript (_: Int) -> Int { get }
+  subscript (_: Double) -> Double { get }
+}
+
+extension P10 {
+  subscript(i: Int) -> Int {
+    return Int(self[Double(i)])
+  }
+}
+
+struct X10 : P10 {
+  subscript(f: Float) -> Float { return f }
+}
+
+extension X10 {
+  subscript(d: Double) -> Double { return d }
+}
+
+protocol Empty1 {}
+protocol Empty2 {}
+
+struct Concrete1 {}
+extension Concrete1 : Empty1 & Empty2 {}
+
+typealias T = Empty1 & Empty2
+struct Concrete2 {}
+extension Concrete2 : T {}
+
+func f<T : Empty1 & Empty2>(_: T) {}
+
+func useF() {
+  f(Concrete1())
+  f(Concrete2())
 }

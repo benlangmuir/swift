@@ -23,6 +23,7 @@
 #include "swift/AST/Types.h"
 #include "swift/AST/Decl.h"
 #include "swift/AST/Pattern.h"
+#include "swift/SIL/SILModule.h"
 #include "swift/SIL/SILType.h"
 #include "llvm/IR/DerivedTypes.h"
 
@@ -67,12 +68,32 @@ namespace {
       return t.getTupleElementType(Index);
     }
   };
+  
+  /// Project a tuple offset from a tuple metadata structure.
+  static llvm::Value *loadTupleOffsetFromMetadata(IRGenFunction &IGF,
+                                                  llvm::Value *metadata,
+                                                  unsigned index) {
+    auto asTuple = IGF.Builder.CreateBitCast(metadata,
+                                             IGF.IGM.TupleTypeMetadataPtrTy);
+
+    llvm::Value *indices[] = {
+      IGF.IGM.getSize(Size(0)),                   // (*tupleType)
+      llvm::ConstantInt::get(IGF.IGM.Int32Ty, 3), //   .Elements
+      IGF.IGM.getSize(Size(index)),               //     [index]
+      llvm::ConstantInt::get(IGF.IGM.Int32Ty, 1)  //       .Offset
+    };
+    auto slot = IGF.Builder.CreateInBoundsGEP(asTuple, indices);
+
+    return IGF.Builder.CreateLoad(slot, IGF.IGM.getPointerAlignment(),
+                                  metadata->getName()
+                                    + "." + Twine(index) + ".offset");
+  }
 
   /// Adapter for tuple types.
   template <class Impl, class Base>
   class TupleTypeInfoBase
       : public RecordTypeInfo<Impl, Base, TupleFieldInfo> {
-    typedef RecordTypeInfo<Impl, Base, TupleFieldInfo> super;
+    using super = RecordTypeInfo<Impl, Base, TupleFieldInfo>;
 
   protected:
     template <class... As>
@@ -129,13 +150,17 @@ namespace {
       llvm_unreachable("bad element layout kind");
     }
 
-    unsigned getElementStructIndex(IRGenModule &IGM, unsigned fieldNo) const {
+    Optional<unsigned> getElementStructIndex(IRGenModule &IGM,
+                                             unsigned fieldNo) const {
       const TupleFieldInfo &field = asImpl().getFields()[fieldNo];
+      if (field.isEmpty())
+        return None;
       return field.getStructIndex();
     }
 
     void initializeFromParams(IRGenFunction &IGF, Explosion &params,
-                              Address src, SILType T) const override {
+                              Address src, SILType T,
+                              bool isOutlined) const override {
       llvm_unreachable("unexploded tuple as argument?");
     }
 
@@ -196,6 +221,34 @@ namespace {
       auto &elt = asImpl().getFields()[0];
       elt.getTypeInfo().storeExtraInhabitant(IGF, index, eltAddr,
                                              elt.getType(IGF.IGM, tupleType));
+    }
+    
+    void verify(IRGenTypeVerifierFunction &IGF,
+                llvm::Value *metadata,
+                SILType tupleType) const override {
+      auto fields = asImpl().getFields();
+      for (unsigned i : indices(fields)) {
+        const TupleFieldInfo &field = fields[i];
+        switch (field.getKind()) {
+        case ElementLayout::Kind::Fixed: {
+          // Check that the fixed layout matches the layout in the tuple
+          // metadata.
+          auto fixedOffset = field.getFixedByteOffset();
+          
+          auto runtimeOffset = loadTupleOffsetFromMetadata(IGF, metadata, i);
+
+          IGF.verifyValues(metadata, runtimeOffset,
+                     IGF.IGM.getSize(fixedOffset),
+                     llvm::Twine("offset of tuple element ") + llvm::Twine(i));
+          break;
+        }
+        
+        case ElementLayout::Kind::Empty:
+        case ElementLayout::Kind::InitialNonFixedSize:
+        case ElementLayout::Kind::NonFixed:
+          continue;
+        }
+      }
     }
   };
 
@@ -269,20 +322,7 @@ namespace {
       // Fetch the metadata as a tuple type.  We cache this because
       // we might repeatedly need the bitcast.
       auto metadata = IGF.emitTypeMetadataRefForLayout(TheType);
-      auto asTuple = IGF.Builder.CreateBitCast(metadata,
-                                               IGF.IGM.TupleTypeMetadataPtrTy);
-
-      llvm::Value *indices[] = {
-        IGF.IGM.getSize(Size(0)),                   // (*tupleType)
-        llvm::ConstantInt::get(IGF.IGM.Int32Ty, 3), //   .Elements
-        IGF.IGM.getSize(Size(index)),               //     [index]
-        llvm::ConstantInt::get(IGF.IGM.Int32Ty, 1)  //       .Offset
-      };
-      auto slot = IGF.Builder.CreateInBoundsGEP(asTuple, indices);
-
-      return IGF.Builder.CreateLoad(slot, IGF.IGM.getPointerAlignment(),
-                                    metadata->getName()
-                                      + "." + Twine(index) + ".offset");
+      return loadTupleOffsetFromMetadata(IGF, metadata, index);
     }
   };
 
@@ -292,23 +332,18 @@ namespace {
                                WitnessSizedTypeInfo<NonFixedTupleTypeInfo>>
   {
   public:
-    NonFixedTupleTypeInfo(ArrayRef<TupleFieldInfo> fields, llvm::Type *T,
+    NonFixedTupleTypeInfo(ArrayRef<TupleFieldInfo> fields,
+                          FieldsAreABIAccessible_t fieldsABIAccessible,
+                          llvm::Type *T,
                           Alignment minAlign, IsPOD_t isPOD,
-                          IsBitwiseTakable_t isBT)
-      : TupleTypeInfoBase(fields, T, minAlign, isPOD, isBT) {}
+                          IsBitwiseTakable_t isBT,
+                          IsABIAccessible_t tupleAccessible)
+      : TupleTypeInfoBase(fields, fieldsABIAccessible,
+                          T, minAlign, isPOD, isBT, tupleAccessible) {}
 
     TupleNonFixedOffsets getNonFixedOffsets(IRGenFunction &IGF,
                                             SILType T) const {
       return TupleNonFixedOffsets(T);
-    }
-
-    void initializeMetadata(IRGenFunction &IGF,
-                            llvm::Value *metadata,
-                            llvm::Value *vwtable,
-                            SILType T) const override {
-      // Tuple value witness tables are instantiated by the runtime along with
-      // their metadata. We should never try to initialize one in the compiler.
-      llvm_unreachable("initializing value witness table for tuple?!");
     }
   };
 
@@ -344,11 +379,16 @@ namespace {
     }
 
     NonFixedTupleTypeInfo *createNonFixed(ArrayRef<TupleFieldInfo> fields,
+                                     FieldsAreABIAccessible_t fieldsAccessible,
                                           StructLayout &&layout) {
-      return NonFixedTupleTypeInfo::create(fields, layout.getType(),
+      auto tupleAccessible = IsABIAccessible_t(
+        IGM.getSILModule().isTypeABIAccessible(TheTuple));
+      return NonFixedTupleTypeInfo::create(fields, fieldsAccessible,
+                                           layout.getType(),
                                            layout.getAlignment(),
                                            layout.isPOD(),
-                                           layout.isBitwiseTakable());
+                                           layout.isBitwiseTakable(),
+                                           tupleAccessible);
     }
 
     TupleFieldInfo getFieldInfo(unsigned index,
@@ -412,7 +452,8 @@ Optional<Size> irgen::getFixedTupleElementOffset(IRGenModule &IGM,
   FOR_TUPLE_IMPL(IGM, tupleType, getFixedElementOffset, fieldNo);
 }
 
-unsigned irgen::getTupleElementStructIndex(IRGenModule &IGM, SILType tupleType,
-                                           unsigned fieldNo) {
+Optional<unsigned> irgen::getPhysicalTupleElementStructIndex(IRGenModule &IGM,
+                                                             SILType tupleType,
+                                                             unsigned fieldNo) {
   FOR_TUPLE_IMPL(IGM, tupleType, getElementStructIndex, fieldNo);
 }

@@ -4,11 +4,13 @@ int redeclaredInMultipleModulesFunc1(int a);
 
 int barGlobalFunc(int a);
 
-int barGlobalVariable = 1;
+extern int barGlobalVariable;
 
-int barGlobalVariableOldEnumElement = 1;
+extern int barGlobalVariableOldEnumElement;
 
 int barGlobalFuncOldName(int a);
+
+int barGlobalHoistedFuncOldName(int a, int b, int c);
 
 @interface BarForwardDeclaredClass
 - (id _Nonnull)initWithOldLabel0:(int)frame;
@@ -25,6 +27,7 @@ enum BarForwardDeclaredEnum {
 - (int) field;
 - (int * _Nullable) field2;
 - (void) setField:(int)info;
+- (void) setURL:(int)url;
 + (int) fieldPlus;
 + (void) methodPlus:(int)info;
 + (void) methodPlus;
@@ -35,9 +38,14 @@ enum BarForwardDeclaredEnum {
 typedef struct {
   int count;
   int theSimpleOldName;
+  int theSimpleOldNameNotToRename;
 } SomeItemSet;
 
 typedef SomeItemSet SomeEnvironment;
+
+@protocol WillOverrideWithTypeChange
+- (SomeItemSet)doThing:(SomeItemSet)thing;
+@end
 
 #define CF_ENUM(_type, _name) enum _name : _type _name; enum _name : _type
 #define NS_ENUM(_type, _name) CF_ENUM(_type, _name)
@@ -45,5 +53,12 @@ typedef SomeItemSet SomeEnvironment;
 typedef NS_ENUM(long, FooComparisonResult) {
   FooOrderedAscending = -1L,
   FooOrderedSame,
-  FooOrderedDescending
+  FooOrderedDescending,
+  FooOrderedMemberSame,
+  FooOrderedMovedToGlobal,
 };
+
+@interface BarBase
+@end
+@interface BarBaseNested
+@end

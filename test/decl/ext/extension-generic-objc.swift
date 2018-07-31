@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -typecheck -verify %s
+// RUN: %target-typecheck-verify-swift
 
 // REQUIRES: objc_interop
 
@@ -47,3 +47,12 @@ extension D {
     func d2() {}
 }
 
+class Outer<T> {
+    class Inner {}
+}
+
+extension Outer.Inner {
+    @objc func outerInner1() {}
+    // expected-error@-1{{@objc is not supported within extensions of generic classes or classes that inherit from generic classes}}
+    func outerInner2() {}
+}

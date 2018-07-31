@@ -1,5 +1,5 @@
 // RUN: %empty-directory(%t)
-// RUN: %target-build-swift %s -Xfrontend -enable-experimental-keypath-components -o %t/a.out
+// RUN: %target-build-swift %s -o %t/a.out
 // RUN: %target-run %t/a.out
 // REQUIRES: executable_test
 // REQUIRES: objc_interop
@@ -21,11 +21,33 @@ class Foo: NSObject {
   @objc subscript(x: Int) -> Foo { return self }
   @objc subscript(x: Bar) -> Foo { return self }
 
-  dynamic var dynamic: Bar { fatalError() }
+  @objc dynamic var dynamic: Bar { fatalError() }
+
+  let storedLet = LifetimeTracked(0)
+}
+
+// We just need some non-empty ObjC-defined class here to ensure we get the
+// right offset for a 'let' or final stored property after the ObjC runtime
+// slides offsets
+class MyWeirdFormatter: DateFormatter {
+  let storedLet = LifetimeTracked(1)
 }
 
 class Bar: NSObject {
   @objc var foo: Foo { fatalError() }
+}
+
+var testStoredProperties = TestSuite("stored properties in ObjC subclasses")
+
+testStoredProperties.test("final stored properties in ObjC subclasses") {
+  let fooLet = \Foo.storedLet
+  let formatterLet = \MyWeirdFormatter.storedLet
+
+  let foo = Foo()
+  let formatter = MyWeirdFormatter()
+
+  expectTrue(foo[keyPath: fooLet] === foo.storedLet)
+  expectTrue(formatter[keyPath: formatterLet] === formatter.storedLet)
 }
 
 var testKVCStrings = TestSuite("KVC strings")

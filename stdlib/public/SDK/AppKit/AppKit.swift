@@ -13,7 +13,8 @@
 import Foundation
 @_exported import AppKit
 
-extension NSCursor : _DefaultCustomPlaygroundQuickLookable {
+extension NSCursor : __DefaultCustomPlaygroundQuickLookable {
+  @available(*, deprecated, message: "NSCursor._defaultCustomPlaygroundQuickLook will be removed in a future Swift version")
   public var _defaultCustomPlaygroundQuickLook: PlaygroundQuickLook {
     return .image(image)
   }
@@ -23,7 +24,8 @@ internal struct _NSViewQuickLookState {
   static var views = Set<NSView>()
 }
 
-extension NSView : _DefaultCustomPlaygroundQuickLookable {
+extension NSView : __DefaultCustomPlaygroundQuickLookable {
+  @available(*, deprecated, message: "NSView._defaultCustomPlaygroundQuickLook will be removed in a future Swift version")
   public var _defaultCustomPlaygroundQuickLook: PlaygroundQuickLook {
     // if you set NSView.needsDisplay, you can get yourself in a recursive scenario where the same view
     // could need to draw itself in order to get a QLObject for itself, which in turn if your code was
@@ -70,11 +72,18 @@ public func NSApplicationMain(
   }
 }
 
+extension NSApplication {
+  @available(swift 4)
+  public static func loadApplication() {
+    __NSApplicationLoad()
+  }
+}
+
 extension NSColor : _ExpressibleByColorLiteral {
   @nonobjc
-  public required convenience init(colorLiteralRed red: Float, green: Float,
+  public required convenience init(_colorLiteralRed red: Float, green: Float,
                                    blue: Float, alpha: Float) {
-    self.init(srgbRed: CGFloat(red), green: CGFloat(green),
+    self.init(red: CGFloat(red), green: CGFloat(green),
               blue: CGFloat(blue), alpha: CGFloat(alpha))
   }
 }
@@ -83,7 +92,7 @@ public typealias _ColorLiteralType = NSColor
 
 extension NSImage : _ExpressibleByImageLiteral {
   private convenience init!(failableImageLiteral name: String) {
-    self.init(named: name)
+    self.init(named: .init(name))
   }
 
   @nonobjc
@@ -93,3 +102,61 @@ extension NSImage : _ExpressibleByImageLiteral {
 }
 
 public typealias _ImageLiteralType = NSImage
+
+// Numeric backed types
+
+@available(swift 4)
+public protocol _AppKitKitNumericRawRepresentable : RawRepresentable, Comparable
+  where RawValue: Comparable & Numeric { }
+
+extension _AppKitKitNumericRawRepresentable {
+  public static func <(lhs: Self, rhs: Self) -> Bool {
+    return lhs.rawValue < rhs.rawValue
+  }
+
+  public static func +(lhs: Self, rhs: RawValue) -> Self {
+    return Self(rawValue: lhs.rawValue + rhs)!
+  }
+
+  public static func +(lhs: RawValue, rhs: Self) -> Self {
+    return Self(rawValue: lhs + rhs.rawValue)!
+  }
+
+  public static func -(lhs: Self, rhs: RawValue) -> Self {
+    return Self(rawValue: lhs.rawValue - rhs)!
+  }
+
+  public static func -(lhs: Self, rhs: Self) -> RawValue {
+    return lhs.rawValue - rhs.rawValue
+  }
+
+  public static func +=(lhs: inout Self, rhs: RawValue) {
+    lhs = Self(rawValue: lhs.rawValue + rhs)!
+  }
+
+  public static func -=(lhs: inout Self, rhs: RawValue) {
+    lhs = Self(rawValue: lhs.rawValue - rhs)!
+  }
+}
+
+@available(swift 4)
+extension NSAppKitVersion : _AppKitKitNumericRawRepresentable { }
+
+@available(swift 4)
+extension NSLayoutConstraint.Priority : _AppKitKitNumericRawRepresentable { }
+
+@available(swift 4)
+extension NSStackView.VisibilityPriority : _AppKitKitNumericRawRepresentable { }
+
+@available(swift 4)
+extension NSToolbarItem.VisibilityPriority : _AppKitKitNumericRawRepresentable { }
+
+@available(macOS 10.12.2, *)
+@available(swift 4)
+extension NSTouchBarItem.Priority : _AppKitKitNumericRawRepresentable { }
+
+@available(swift 4)
+extension NSWindow.Level : _AppKitKitNumericRawRepresentable { }
+
+@available(swift 4)
+extension NSFont.Weight : _AppKitKitNumericRawRepresentable { }

@@ -104,11 +104,11 @@ public:
   }
 
   constexpr static KeyPathComponentHeader
-  forStructComponentWithUnresolvedOffset() {
+  forStructComponentWithUnresolvedFieldOffset() {
     return KeyPathComponentHeader(
       (_SwiftKeyPathComponentHeader_StructTag
       << _SwiftKeyPathComponentHeader_DiscriminatorShift)
-      | _SwiftKeyPathComponentHeader_UnresolvedOffsetPayload);
+      | _SwiftKeyPathComponentHeader_UnresolvedFieldOffsetPayload);
   }
   
   constexpr static KeyPathComponentHeader
@@ -128,11 +128,19 @@ public:
   }
   
   constexpr static KeyPathComponentHeader
-  forClassComponentWithUnresolvedOffset() {
+  forClassComponentWithUnresolvedFieldOffset() {
     return KeyPathComponentHeader(
-      (_SwiftKeyPathComponentHeader_StructTag
+      (_SwiftKeyPathComponentHeader_ClassTag
       << _SwiftKeyPathComponentHeader_DiscriminatorShift)
-      | _SwiftKeyPathComponentHeader_UnresolvedOffsetPayload);
+      | _SwiftKeyPathComponentHeader_UnresolvedFieldOffsetPayload);
+  }
+  
+  constexpr static KeyPathComponentHeader
+  forClassComponentWithUnresolvedIndirectOffset() {
+    return KeyPathComponentHeader(
+      (_SwiftKeyPathComponentHeader_ClassTag
+      << _SwiftKeyPathComponentHeader_DiscriminatorShift)
+      | _SwiftKeyPathComponentHeader_UnresolvedIndirectOffsetPayload);
   }
   
   constexpr static KeyPathComponentHeader
@@ -165,14 +173,13 @@ public:
   
   enum ComputedPropertyIDKind {
     Pointer,
-    StoredPropertyOffset,
+    StoredPropertyIndex,
     VTableOffset,
   };
   
   constexpr static uint32_t
   getResolutionStrategy(ComputedPropertyIDKind idKind) {
     return idKind == Pointer ? _SwiftKeyPathComponentHeader_ComputedIDUnresolvedIndirectPointer
-         : idKind == StoredPropertyOffset ? _SwiftKeyPathComponentHeader_ComputedIDUnresolvedFieldOffset
          : (assert("no resolution strategy implemented" && false), 0);
   }
   
@@ -183,18 +190,29 @@ public:
                       bool resolvedID) {
     return KeyPathComponentHeader(
       (_SwiftKeyPathComponentHeader_ComputedTag
-      << _SwiftKeyPathComponentHeader_DiscriminatorShift)
+        << _SwiftKeyPathComponentHeader_DiscriminatorShift)
       | (kind != GetOnly
            ? _SwiftKeyPathComponentHeader_ComputedSettableFlag : 0)
       | (kind == SettableMutating
            ? _SwiftKeyPathComponentHeader_ComputedMutatingFlag : 0)
-      | (idKind == StoredPropertyOffset
+      | (idKind == StoredPropertyIndex
            ? _SwiftKeyPathComponentHeader_ComputedIDByStoredPropertyFlag : 0)
       | (idKind == VTableOffset
            ? _SwiftKeyPathComponentHeader_ComputedIDByVTableOffsetFlag : 0)
       | (hasArguments ? _SwiftKeyPathComponentHeader_ComputedHasArgumentsFlag : 0)
       | (resolvedID ? _SwiftKeyPathComponentHeader_ComputedIDResolved
                     : getResolutionStrategy(idKind)));
+  }
+  
+  constexpr static KeyPathComponentHeader
+  forExternalComponent(unsigned numSubstitutions) {
+    return assert(numSubstitutions <
+        (1u << _SwiftKeyPathComponentHeader_DiscriminatorShift) - 1u
+        && "too many substitutions"),
+      KeyPathComponentHeader(
+        (_SwiftKeyPathComponentHeader_ExternalTag
+          << _SwiftKeyPathComponentHeader_DiscriminatorShift)
+        | numSubstitutions);
   }
   
   constexpr uint32_t getData() const { return Data; }

@@ -29,6 +29,8 @@ private:
   using LoadedModulePair = std::pair<std::unique_ptr<ModuleFile>, unsigned>;
   std::vector<LoadedModulePair> LoadedModuleFiles;
 
+  SmallVector<std::unique_ptr<llvm::MemoryBuffer>, 2> OrphanedMemoryBuffers;
+
   explicit SerializedModuleLoader(ASTContext &ctx, DependencyTracker *tracker);
 
 public:
@@ -132,6 +134,10 @@ public:
 
   virtual TypeDecl *lookupLocalType(StringRef MangledName) const override;
 
+  virtual TypeDecl *
+  lookupNestedType(Identifier name,
+                   const NominalTypeDecl *parent) const override;
+
   virtual OperatorDecl *lookupOperator(Identifier name,
                                        DeclKind fixity) const override;
 
@@ -189,7 +195,11 @@ public:
 
   bool hasEntryPoint() const override;
 
-  virtual const clang::Module *getUnderlyingClangModule() override;
+  virtual const clang::Module *getUnderlyingClangModule() const override;
+
+  virtual bool getAllGenericSignatures(
+                   SmallVectorImpl<GenericSignature*> &genericSignatures)
+                override;
 
   static bool classof(const FileUnit *file) {
     return file->getKind() == FileUnitKind::SerializedAST;

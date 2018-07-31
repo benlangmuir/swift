@@ -38,8 +38,8 @@ static std::vector<StringRef> sortSymbols(llvm::StringSet<> &symbols) {
   return sorted;
 }
 
-bool swift::writeTBD(ModuleDecl *M, bool hasMultipleIRGenThreads,
-                     StringRef OutputFilename) {
+bool swift::writeTBD(ModuleDecl *M, StringRef OutputFilename,
+                     TBDGenOptions &Opts) {
   std::error_code EC;
   llvm::raw_fd_ostream OS(OutputFilename, EC, llvm::sys::fs::F_None);
   if (EC) {
@@ -47,15 +47,8 @@ bool swift::writeTBD(ModuleDecl *M, bool hasMultipleIRGenThreads,
                                       OutputFilename, EC.message());
     return true;
   }
-  llvm::StringSet<> symbols;
-  for (auto file : M->getFiles())
-    enumeratePublicSymbols(file, symbols, hasMultipleIRGenThreads,
-                           /*isWholeModule=*/true);
 
-  // Ensure the order is stable.
-  for (auto &symbol : sortSymbols(symbols)) {
-    OS << symbol << "\n";
-  }
+  writeTBDFile(M, OS, Opts);
 
   return false;
 }
@@ -120,27 +113,26 @@ static bool validateSymbolSet(DiagnosticEngine &diags,
     }
   }
 
+  if (error) {
+    diags.diagnose(SourceLoc(), diag::tbd_validation_failure);
+  }
+
   return error;
 }
 
 bool swift::validateTBD(ModuleDecl *M, llvm::Module &IRModule,
-                        bool hasMultipleIRGenThreads,
-                        bool diagnoseExtraSymbolsInTBD) {
+                        TBDGenOptions &opts, bool diagnoseExtraSymbolsInTBD) {
   llvm::StringSet<> symbols;
-  for (auto file : M->getFiles())
-    enumeratePublicSymbols(file, symbols, hasMultipleIRGenThreads,
-                           /*isWholeModule=*/true);
+  enumeratePublicSymbols(M, symbols, opts);
 
   return validateSymbolSet(M->getASTContext().Diags, symbols, IRModule,
                            diagnoseExtraSymbolsInTBD);
 }
 
 bool swift::validateTBD(FileUnit *file, llvm::Module &IRModule,
-                        bool hasMultipleIRGenThreads,
-                        bool diagnoseExtraSymbolsInTBD) {
+                        TBDGenOptions &opts, bool diagnoseExtraSymbolsInTBD) {
   llvm::StringSet<> symbols;
-  enumeratePublicSymbols(file, symbols, hasMultipleIRGenThreads,
-                         /*isWholeModule=*/false);
+  enumeratePublicSymbols(file, symbols, opts);
 
   return validateSymbolSet(file->getParentModule()->getASTContext().Diags,
                            symbols, IRModule, diagnoseExtraSymbolsInTBD);

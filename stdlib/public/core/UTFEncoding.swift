@@ -17,7 +17,7 @@
 
 
 public protocol _UTFParser {
-  associatedtype Encoding : _UnicodeEncoding_
+  associatedtype Encoding : _UnicodeEncoding
 
   func _parseMultipleCodeUnits() -> (isValid: Bool, bitCount: UInt8)
   func _bufferedScalar(bitCount: UInt8) -> Encoding.EncodedScalar
@@ -28,6 +28,7 @@ public protocol _UTFParser {
 extension _UTFParser
 where Encoding.EncodedScalar : RangeReplaceableCollection {
 
+  @inlinable // FIXME(sil-serialize-all)
   @inline(__always)
   public mutating func parseScalar<I : IteratorProtocol>(
     from input: inout I
@@ -44,11 +45,11 @@ where Encoding.EncodedScalar : RangeReplaceableCollection {
       // Non-ASCII, proceed to buffering mode.
       _buffer.append(codeUnit)
     } else if Encoding._isScalar(
-      Encoding.CodeUnit(extendingOrTruncating: _buffer._storage)
+      Encoding.CodeUnit(truncatingIfNeeded: _buffer._storage)
     ) {
       // ASCII in _buffer.  We don't refill the buffer so we can return
       // to bufferless mode once we've exhausted it.
-      let codeUnit = Encoding.CodeUnit(extendingOrTruncating: _buffer._storage)
+      let codeUnit = Encoding.CodeUnit(truncatingIfNeeded: _buffer._storage)
       _buffer.remove(at: _buffer.startIndex)
       return .valid(Encoding.EncodedScalar(CollectionOfOne(codeUnit)))
     }
@@ -74,7 +75,7 @@ where Encoding.EncodedScalar : RangeReplaceableCollection {
     
     _buffer._storage = UInt32(
       // widen to 64 bits so that we can empty the buffer in the 4-byte case
-      extendingOrTruncating: UInt64(_buffer._storage) &>> scalarBitCount)
+      truncatingIfNeeded: UInt64(_buffer._storage) &>> scalarBitCount)
       
     _buffer._bitCount = _buffer._bitCount &- scalarBitCount
 

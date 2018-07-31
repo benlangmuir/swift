@@ -14,7 +14,7 @@
 import CoreGraphics
 
 extension Int8 : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.int8Value
     }
@@ -55,7 +55,7 @@ extension Int8 : _ObjectiveCBridgeable {
 }
 
 extension UInt8 : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.uint8Value
     }
@@ -96,7 +96,7 @@ extension UInt8 : _ObjectiveCBridgeable {
 }
 
 extension Int16 : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.int16Value
     }
@@ -137,7 +137,7 @@ extension Int16 : _ObjectiveCBridgeable {
 }
 
 extension UInt16 : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.uint16Value
     }
@@ -178,7 +178,7 @@ extension UInt16 : _ObjectiveCBridgeable {
 }
 
 extension Int32 : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.int32Value
     }
@@ -219,7 +219,7 @@ extension Int32 : _ObjectiveCBridgeable {
 }
 
 extension UInt32 : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.uint32Value
     }
@@ -260,7 +260,7 @@ extension UInt32 : _ObjectiveCBridgeable {
 }
 
 extension Int64 : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.int64Value
     }
@@ -301,7 +301,7 @@ extension Int64 : _ObjectiveCBridgeable {
 }
 
 extension UInt64 : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.uint64Value
     }
@@ -342,7 +342,7 @@ extension UInt64 : _ObjectiveCBridgeable {
 }
 
 extension Int : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.intValue
     }
@@ -383,7 +383,7 @@ extension Int : _ObjectiveCBridgeable {
 }
 
 extension UInt : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.uintValue
     }
@@ -424,7 +424,7 @@ extension UInt : _ObjectiveCBridgeable {
 }
 
 extension Float : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.floatValue
     }
@@ -434,9 +434,17 @@ extension Float : _ObjectiveCBridgeable {
     }
 
     public init?(exactly number: NSNumber) {
-        guard let value = Double(exactly: number) else { return nil }
-        guard let result = Float(exactly: value) else { return nil }
-        self = result
+        let type = number.objCType.pointee
+        if type == 0x49 || type == 0x4c || type == 0x51 {
+            guard let result = Float(exactly: number.uint64Value) else { return nil }
+            self = result
+        } else if type == 0x69 || type == 0x6c || type == 0x71 {
+            guard let result = Float(exactly: number.int64Value) else { return nil }
+            self = result
+        } else {
+            guard let result = Float(exactly: number.doubleValue) else { return nil }
+            self = result
+        }
     }
 
     @_semantics("convertToObjectiveC")
@@ -451,9 +459,12 @@ extension Float : _ObjectiveCBridgeable {
     }
     
     public static func _conditionallyBridgeFromObjectiveC(_ x: NSNumber, result: inout Float?) -> Bool {
-        guard let value = Float(exactly: x) else { return false }
-        result = value
-        return true
+        if x.floatValue.isNaN {
+            result = x.floatValue
+            return true
+        }
+        result = Float(exactly: x)
+        return result != nil
     }
     
     public static func _unconditionallyBridgeFromObjectiveC(_ source: NSNumber?) -> Float {
@@ -465,7 +476,7 @@ extension Float : _ObjectiveCBridgeable {
 }
 
 extension Double : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.doubleValue
     }
@@ -483,7 +494,10 @@ extension Double : _ObjectiveCBridgeable {
             guard let result = Double(exactly: number.int64Value) else  { return nil }
             self = result
         } else {
-            self = number.doubleValue
+            // All other integer types and single-precision floating points will
+            // fit in a `Double` without truncation.
+            guard let result = Double(exactly: number.doubleValue) else { return nil }
+            self = result
         }
     }
 
@@ -499,9 +513,12 @@ extension Double : _ObjectiveCBridgeable {
     }
     
     public static func _conditionallyBridgeFromObjectiveC(_ x: NSNumber, result: inout Double?) -> Bool {
-        guard let value = Double(exactly: x) else { return false }
-        result = value
-        return true
+        if x.doubleValue.isNaN {
+            result = x.doubleValue
+            return true
+        }
+        result = Double(exactly: x)
+        return result != nil
     }
     
     public static func _unconditionallyBridgeFromObjectiveC(_ source: NSNumber?) -> Double {
@@ -513,7 +530,7 @@ extension Double : _ObjectiveCBridgeable {
 }
 
 extension Bool : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
         self = number.boolValue
     }
@@ -564,19 +581,19 @@ extension Bool : _ObjectiveCBridgeable {
 }
 
 extension CGFloat : _ObjectiveCBridgeable {
-    @available(swift, deprecated: 4)
+    @available(swift, deprecated: 4, renamed: "init(truncating:)")
     public init(_ number: NSNumber) {
-        native = CGFloat.NativeType(truncating: number)
+        self.init(CGFloat.NativeType(truncating: number))
     }
 
     public init(truncating number: NSNumber) {
-        native = CGFloat.NativeType(truncating: number)
+        self.init(CGFloat.NativeType(truncating: number))
     }
 
     public init?(exactly number: NSNumber) {
         var nativeValue: CGFloat.NativeType? = 0
         guard CGFloat.NativeType._conditionallyBridgeFromObjectiveC(number, result: &nativeValue) else { return nil }
-        self.native = nativeValue!
+        self.init(nativeValue!)
     }
 
     @_semantics("convertToObjectiveC")
@@ -631,28 +648,35 @@ extension NSNumber : _HasCustomAnyHashableRepresentation {
     // AnyHashable to NSObject.
     @nonobjc
     public func _toCustomAnyHashable() -> AnyHashable? {
+        // The custom AnyHashable representation here is used when checking for
+        // equality during bridging NSDictionary to Dictionary (or looking up
+        // values in a Dictionary bridged to NSDictionary).
+        // 
+        // When we've got NSNumber values as keys that we want to compare
+        // through an AnyHashable box, we want to compare values through the
+        // largest box size we've got available to us (i.e. upcast numbers).
+        // This happens to resemble the representation that NSNumber uses
+        // internally: (long long | unsigned long long | double).
+        // 
+        // This allows us to compare things like
+        // 
+        //     ([Int : Any] as [AnyHashable : Any]) vs. [NSNumber : Any]
+        // 
+        // because Int can be upcast to Int64 and compared with the number's
+        // Int64 value.
+        // 
+        // If NSNumber adds 128-bit representations, this will need to be
+        // updated to use those.
         if let nsDecimalNumber: NSDecimalNumber = self as? NSDecimalNumber {
             return AnyHashable(nsDecimalNumber.decimalValue)
         } else if self === kCFBooleanTrue as NSNumber {
             return AnyHashable(true)
         } else if self === kCFBooleanFalse as NSNumber {
             return AnyHashable(false)
-        } else if NSNumber(value: int8Value) == self {
-            return AnyHashable(int8Value)
-        } else  if NSNumber(value: uint8Value) == self {
-            return AnyHashable(uint8Value)
-        } else if NSNumber(value: int16Value) == self {
-            return AnyHashable(int16Value)
-        } else if NSNumber(value: uint16Value) == self {
-            return AnyHashable(uint16Value)
-        } else if NSNumber(value: int32Value) == self {
-            return AnyHashable(int32Value)
-        } else if NSNumber(value: uint32Value) == self {
-            return AnyHashable(uint32Value)
         } else if NSNumber(value: int64Value) == self {
             return AnyHashable(int64Value)
-        } else if NSNumber(value: floatValue) == self {
-            return AnyHashable(floatValue)
+        } else if NSNumber(value: uint64Value) == self {
+            return AnyHashable(uint64Value)
         } else if NSNumber(value: doubleValue) == self {
             return AnyHashable(doubleValue)
         } else {
@@ -660,4 +684,3 @@ extension NSNumber : _HasCustomAnyHashableRepresentation {
         }
     }
 }
-

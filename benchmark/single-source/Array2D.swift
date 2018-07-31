@@ -10,16 +10,26 @@
 //
 //===----------------------------------------------------------------------===//
 
-@inline(never)
-public func run_Array2D(_ N: Int) {
+import TestsUtils
+
+public let Array2D = BenchmarkInfo(
+  name: "Array2D",
+  runFunction: run_Array2D,
+  tags: [.validation, .api, .Array],
+  setUpFunction: { blackHole(inputArray) },
+  tearDownFunction: { inputArray = nil })
+
+var inputArray: [[Int]]! = {
   var A: [[Int]] = []
+  A.reserveCapacity(1024)
   for _ in 0 ..< 1024 {
-    var B: [Int] = []
-    for y in 0 ..< 1024 {
-      B.append(y)
-    }
-    A.append(B)
+    A.append(Array(0 ..< 1024))
   }
+  return A
+}()
+
+@inline(never)
+func modifyArray(_ A: inout [[Int]], _ N: Int) {
   for _ in 0..<N {
     for i in 0 ..< 1024 {
       for y in 0 ..< 1024 {
@@ -28,4 +38,9 @@ public func run_Array2D(_ N: Int) {
       }
     }
   }
+}
+
+@inline(never)
+public func run_Array2D(_ N: Int) {
+  modifyArray(&inputArray, N)
 }

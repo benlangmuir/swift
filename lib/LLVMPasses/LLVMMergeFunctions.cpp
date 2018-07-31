@@ -37,6 +37,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -74,7 +75,7 @@ static cl::opt<unsigned> FunctionMergeThreshold(
     "swiftmergefunc-threshold",
     cl::desc("Functions larger than the threshold are considered for merging."
              "'0' disables function merging at all."),
-    cl::init(30), cl::Hidden);
+    cl::init(15), cl::Hidden);
 
 namespace {
 
@@ -262,7 +263,7 @@ private:
       return FCmp.compareIgnoringConsts() == -1;
     }
   };
-  typedef std::set<EquivalenceClass, FunctionNodeCmp> FnTreeType;
+  using FnTreeType = std::set<EquivalenceClass, FunctionNodeCmp>;
 
   /// 
   struct FunctionEntry {
@@ -333,7 +334,7 @@ private:
     int NumParamsNeeded;
   };
 
-  typedef SmallVector<FunctionInfo, 8> FunctionInfos;
+  using FunctionInfos = SmallVector<FunctionInfo, 8>;
 
   /// Describes a parameter which we create to parameterize the merged function.
   struct ParamInfo {
@@ -360,13 +361,13 @@ private:
     }
   };
 
-  typedef SmallVector<ParamInfo, maxAddedParams> ParamInfos;
+  using ParamInfos = SmallVector<ParamInfo, maxAddedParams>;
 
   GlobalNumberState GlobalNumbers;
 
   /// A work queue of functions that may have been modified and should be
   /// analyzed again.
-  std::vector<WeakVH> Deferred;
+  std::vector<WeakTrackingVH> Deferred;
 
   /// The set of all distinct functions. Use the insert() and remove() methods
   /// to modify it. The map allows efficient lookup and deferring of Functions.
@@ -389,7 +390,7 @@ private:
 
   /// Checks the rules of order relation introduced among functions set.
   /// Returns true, if sanity check has been passed, and false if failed.
-  bool doSanityCheck(std::vector<WeakVH> &Worklist);
+  bool doSanityCheck(std::vector<WeakTrackingVH> &Worklist);
 
   /// Updates the numUnhandledCallees of all user functions of the equivalence
   /// class containing \p FE by \p Delta.
@@ -434,7 +435,7 @@ llvm::ModulePass *swift::createSwiftMergeFunctionsPass() {
   return new SwiftMergeFunctions();
 }
 
-bool SwiftMergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
+bool SwiftMergeFunctions::doSanityCheck(std::vector<WeakTrackingVH> &Worklist) {
   if (const unsigned Max = NumFunctionsForSanityCheck) {
     unsigned TripleNumber = 0;
     bool Valid = true;
@@ -442,10 +443,12 @@ bool SwiftMergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
     dbgs() << "MERGEFUNC-SANITY: Started for first " << Max << " functions.\n";
 
     unsigned i = 0;
-    for (std::vector<WeakVH>::iterator I = Worklist.begin(), E = Worklist.end();
+    for (std::vector<WeakTrackingVH>::iterator I = Worklist.begin(),
+                                               E = Worklist.end();
          I != E && i < Max; ++I, ++i) {
       unsigned j = i;
-      for (std::vector<WeakVH>::iterator J = I; J != E && j < Max; ++J, ++j) {
+      for (std::vector<WeakTrackingVH>::iterator J = I; J != E && j < Max;
+           ++J, ++j) {
         Function *F1 = cast<Function>(*I);
         Function *F2 = cast<Function>(*J);
         int Res1 = SwiftFunctionComparator(F1, F2, &GlobalNumbers).
@@ -466,7 +469,7 @@ bool SwiftMergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
           continue;
 
         unsigned k = j;
-        for (std::vector<WeakVH>::iterator K = J; K != E && k < Max;
+        for (std::vector<WeakTrackingVH>::iterator K = J; K != E && k < Max;
              ++k, ++K, ++TripleNumber) {
           if (K == J)
             continue;
@@ -584,25 +587,25 @@ bool SwiftMergeFunctions::runOnModule(Module &M) {
     // consider merging it. Otherwise it is dropped and never considered again.
     if ((I != S && std::prev(I)->first == I->first) ||
         (std::next(I) != IE && std::next(I)->first == I->first) ) {
-      Deferred.push_back(WeakVH(F));
+      Deferred.push_back(WeakTrackingVH(F));
     }
   }
 
   do {
-    std::vector<WeakVH> Worklist;
+    std::vector<WeakTrackingVH> Worklist;
     Deferred.swap(Worklist);
 
-    DEBUG(dbgs() << "======\nbuild tree: worklist-size=" << Worklist.size() <<
-                    '\n');
-    DEBUG(doSanityCheck(Worklist));
+    LLVM_DEBUG(dbgs() << "======\nbuild tree: worklist-size="
+                      << Worklist.size() << '\n');
+    LLVM_DEBUG(doSanityCheck(Worklist));
 
     SmallVector<FunctionEntry *, 8> FuncsToMerge;
 
     // Insert all candidates into the Worklist.
-    for (std::vector<WeakVH>::iterator I = Worklist.begin(),
-           E = Worklist.end(); I != E; ++I) {
-      if (!*I) continue;
-      Function *F = cast<Function>(*I);
+    for (WeakTrackingVH &I : Worklist) {
+      if (!I)
+        continue;
+      Function *F = cast<Function>(I);
       FunctionEntry *FE = getEntry(F);
       assert(!isInEquivalenceClass(FE));
 
@@ -613,10 +616,10 @@ bool SwiftMergeFunctions::runOnModule(Module &M) {
 
       if (Result.second) {
         assert(Eq.First == FE);
-        DEBUG(dbgs() << "  new in tree: " << F->getName() << '\n');
+        LLVM_DEBUG(dbgs() << "  new in tree: " << F->getName() << '\n');
       } else {
         assert(Eq.First != FE);
-        DEBUG(dbgs() << "  add to existing: " << F->getName() << '\n');
+        LLVM_DEBUG(dbgs() << "  add to existing: " << F->getName() << '\n');
         // Add the function to the existing equivalence class.
         FE->Next = Eq.First->Next;
         Eq.First->Next = FE;
@@ -626,7 +629,8 @@ bool SwiftMergeFunctions::runOnModule(Module &M) {
           FuncsToMerge.push_back(Eq.First);
       }
     }
-    DEBUG(dbgs() << "merge functions: tree-size=" << FnTree.size() << '\n');
+    LLVM_DEBUG(dbgs() << "merge functions: tree-size=" << FnTree.size()
+                      << '\n');
 
     // Figure out the leaf functions. We want to do the merging in bottom-up
     // call order. This ensures that we don't parameterize on callee function
@@ -872,7 +876,7 @@ void SwiftMergeFunctions::mergeWithParams(const FunctionInfos &FInfos,
   FirstF->getParent()->getFunctionList().insert(
                         std::next(FInfos[1].F->getIterator()), NewFunction);
   
-  DEBUG(dbgs() << "  Merge into " << NewFunction->getName() << '\n');
+  LLVM_DEBUG(dbgs() << "  Merge into " << NewFunction->getName() << '\n');
 
   // Move the body of FirstF into the NewFunction.
   NewFunction->getBasicBlockList().splice(NewFunction->begin(),
@@ -914,7 +918,7 @@ void SwiftMergeFunctions::mergeWithParams(const FunctionInfos &FInfos,
       assert(!isInEquivalenceClass(&*Iter->second));
       Iter->second->F = nullptr;
       FuncEntries.erase(Iter);
-      DEBUG(dbgs() << "    Erase " << OrigFunc->getName() << '\n');
+      LLVM_DEBUG(dbgs() << "    Erase " << OrigFunc->getName() << '\n');
       OrigFunc->eraseFromParent();
     } else {
       // Otherwise we need a thunk which calls the merged function.
@@ -934,7 +938,8 @@ void SwiftMergeFunctions::removeEquivalenceClassFromTree(FunctionEntry *FE) {
   FunctionEntry *Unlink = Iter->First;
   Unlink->numUnhandledCallees = 0;
   while (Unlink) {
-    DEBUG(dbgs() << "    remove from tree: " << Unlink->F->getName() << '\n');
+    LLVM_DEBUG(dbgs() << "    remove from tree: " << Unlink->F->getName()
+                      << '\n');
     if (!Unlink->isMerged)
       Deferred.emplace_back(Unlink->F);
     Unlink->TreeIter = FnTree.end();
@@ -1013,7 +1018,7 @@ void SwiftMergeFunctions::writeThunk(Function *ToFunc, Function *Thunk,
     Builder.CreateRet(createCast(Builder, CI, Thunk->getReturnType()));
   }
 
-  DEBUG(dbgs() << "    writeThunk: " << Thunk->getName() << '\n');
+  LLVM_DEBUG(dbgs() << "    writeThunk: " << Thunk->getName() << '\n');
   ++NumSwiftThunksWritten;
 }
 
@@ -1047,14 +1052,11 @@ bool SwiftMergeFunctions::replaceDirectCallers(Function *Old, Function *New,
 
   for (CallInst *CI : Callers) {
     auto &Context = New->getContext();
-    auto NewFuncAttrs = New->getAttributes();
-    auto CallSiteAttrs = CI->getAttributes();
-
-    CallSiteAttrs = CallSiteAttrs.addAttributes(
-        Context, AttributeSet::ReturnIndex, NewFuncAttrs.getRetAttributes());
+    auto NewPAL = New->getAttributes();
 
     SmallVector<Type *, 8> OldParamTypes;
     SmallVector<Value *, 16> NewArgs;
+    SmallVector<AttributeSet, 8> NewArgAttrs;
     IRBuilder<> Builder(CI);
 
     FunctionType *NewFuncTy = New->getFunctionType();
@@ -1063,10 +1065,7 @@ bool SwiftMergeFunctions::replaceDirectCallers(Function *Old, Function *New,
     
     // Add the existing parameters.
     for (Value *OldArg : CI->arg_operands()) {
-      AttributeSet Attrs = NewFuncAttrs.getParamAttributes(ParamIdx);
-      if (Attrs.getNumSlots())
-        CallSiteAttrs = CallSiteAttrs.addAttributes(Context, ParamIdx, Attrs);
-
+      NewArgAttrs.push_back(NewPAL.getParamAttributes(ParamIdx));
       NewArgs.push_back(OldArg);
       OldParamTypes.push_back(OldArg->getType());
       ++ParamIdx;
@@ -1090,12 +1089,14 @@ bool SwiftMergeFunctions::replaceDirectCallers(Function *Old, Function *New,
     Value *Callee = ConstantExpr::getBitCast(New, FPtrType);
     CallInst *NewCI = Builder.CreateCall(Callee, NewArgs);
     NewCI->setCallingConv(CI->getCallingConv());
-    NewCI->setAttributes(CallSiteAttrs);
-
+    // Don't transfer attributes from the function to the callee. Function
+    // attributes typically aren't relevant to the calling convention or ABI.
+    NewCI->setAttributes(AttributeList::get(Context, /*FnAttrs=*/AttributeSet(),
+                                            NewPAL.getRetAttributes(),
+                                            NewArgAttrs));
     CI->replaceAllUsesWith(NewCI);
     CI->eraseFromParent();
   }
   assert(Old->use_empty() && "should have replaced all uses of old function");
   return Old->hasLocalLinkage();
 }
-

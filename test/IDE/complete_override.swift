@@ -1,139 +1,142 @@
 // RUN: sed -n -e '1,/NO_ERRORS_UP_TO_HERE$/ p' %s > %t_no_errors.swift
-// RUN: %target-swift-frontend -typecheck -verify -disable-objc-attr-requires-foundation-module %t_no_errors.swift
+// RUN: %target-swift-frontend -typecheck -verify -disable-objc-attr-requires-foundation-module -enable-objc-interop %t_no_errors.swift
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_PA -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_PA -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_PA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_PA_EXT_1 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_PA_EXT_1 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_PA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_PA_EXT_2 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_PA_EXT_2 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_PA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_PB -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_PB -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_PB < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PB < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_PA_PB -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_PA_PB -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_PA_PB < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PB < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BA -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BA -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BA_PA -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BA_PA -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BA_PA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BA_PA_EXT1 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BA_PA_EXT1 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BA_PA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BA_PA_EXT2 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BA_PA_EXT2 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BA_PA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BA_PB -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BA_PB -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BA_PB < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PB < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BB -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BB -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BB < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BB < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BE -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BE -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BE < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BE_PA -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BE_PA -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BE_PA < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BE_PA_PE -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BE_PA_PE -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BE_PA_PE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BE_PA_PE_EXT1 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BE_PA_PE_EXT1 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BE_PA_PE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_BE_PA_PE_EXT2 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_BE_PA_PE_EXT2 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_BE_PA_PE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_BE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=CLASS_PEI_PE -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=CLASS_PEI_PE -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=CLASS_PEI_PE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PEI < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOCOL_PA -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=PROTOCOL_PA -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=PROTOCOL_PA < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOCOL_PA_EXT -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=PROTOCOL_PA_EXT -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=PROTOCOL_PA_EXT < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=NESTED_NOMINAL -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=NESTED_NOMINAL -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=NESTED_NOMINAL < %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=NESTED_CLOSURE_1 -code-completion-keywords=false | %FileCheck %s -check-prefix=NESTED_CLOSURE_1
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=NESTED_CLOSURE_2 -code-completion-keywords=false | %FileCheck %s -check-prefix=NESTED_CLOSURE_2
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=NESTED_CLOSURE_1 -code-completion-keywords=false | %FileCheck %s -check-prefix=NESTED_CLOSURE_1
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=NESTED_CLOSURE_2 -code-completion-keywords=false | %FileCheck %s -check-prefix=NESTED_CLOSURE_2
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD1 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD1 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=OMIT_KEYWORD1< %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD2 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD2 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=OMIT_KEYWORD2< %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD3 -code-completion-keywords=false > %t.txt
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD3 -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=OMIT_KEYWORD3< %t.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD4 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD4_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD5 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD1
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD6 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD2
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD7 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD3
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD8 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD8_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD9 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD9_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD10 -code-completion-keywords=false | %FileCheck %s -check-prefix=WITH_PA_NO_PROTOFUNCA
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD4 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD4_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD5 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD1
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD6 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD2
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD7 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD3
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD8 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD8_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD9 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD9_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD10 -code-completion-keywords=false | %FileCheck %s -check-prefix=WITH_PA_NO_PROTOFUNCA
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=HAS_THROWING -code-completion-keywords=false | %FileCheck %s -check-prefix=HAS_THROWING
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ASSOC_TYPE1 -code-completion-keywords=false | %FileCheck %s -check-prefix=ASSOC_TYPE1
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=HAS_THROWING -code-completion-keywords=false | %FileCheck %s -check-prefix=HAS_THROWING
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=ASSOC_TYPE1 -code-completion-keywords=false | %FileCheck %s -check-prefix=ASSOC_TYPE1
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=DEPRECATED_1 -code-completion-keywords=false | %FileCheck %s -check-prefix=DEPRECATED_1
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ESCAPING_1 -code-completion-keywords=false | %FileCheck %s -check-prefix=ESCAPING_1
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=DEPRECATED_1 -code-completion-keywords=false | %FileCheck %s -check-prefix=DEPRECATED_1
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=ESCAPING_1 -code-completion-keywords=false | %FileCheck %s -check-prefix=ESCAPING_1
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER1 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER1
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER2 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER2
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER3 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER2
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER4 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER4
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER5 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER5
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER6 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER6
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER7 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER7
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER8 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER8
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER9 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER10 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER6
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER11 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER12 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER13 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER13
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER14 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER1 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER1
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER2 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER2
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER3 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER2
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER4 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER4
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER5 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER5
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER6 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER6
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER7 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER7
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER8 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER8
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER9 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER10 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER6
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER11 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER12 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER13 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER13
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MODIFIER14 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOINIT_NORM -code-completion-keywords=false | %FileCheck %s -check-prefix=PROTOINIT_NORM
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOINIT_FINAL -code-completion-keywords=false | %FileCheck %s -check-prefix=PROTOINIT_FINAL
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOINIT_STRUCT -code-completion-keywords=false | %FileCheck %s -check-prefix=PROTOINIT_STRUCT
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=PROTOINIT_NORM -code-completion-keywords=false | %FileCheck %s -check-prefix=PROTOINIT_NORM
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=PROTOINIT_FINAL -code-completion-keywords=false | %FileCheck %s -check-prefix=PROTOINIT_FINAL
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=PROTOINIT_STRUCT -code-completion-keywords=false | %FileCheck %s -check-prefix=PROTOINIT_STRUCT
+
+// RUN: %target-swift-ide-test -enable-objc-interop -code-completion -source-filename %s -code-completion-token=MISSING_ASSOC_1 -code-completion-keywords=false | %FileCheck %s -check-prefix=MISSING_ASSOC_1
+
 
 @objc
 class TagPA {}
@@ -704,3 +707,22 @@ struct RequiredS : RequiredP {
 // PROTOINIT_STRUCT: Begin completions, 1 items
 // PROTOINIT_STRUCT-DAG: init(p: Int) {|}; name=init(p: Int)
 // PROTOINIT_STRUCT: End completions
+
+protocol AssocAndMethod {
+  associatedtype T = Int
+  associatedtype U: P0
+  associatedtype V
+
+  func f1(_: T)
+  func f2(_: U)
+  func f3(_: V)
+}
+
+struct MissingAssoc: AssocAndMethod {
+  func #^MISSING_ASSOC_1^#
+}
+// MISSING_ASSOC_1: Begin completions
+// MISSING_ASSOC_1-DAG: Decl[InstanceMethod]/Super:         f1(_: MissingAssoc.T) {|};
+// MISSING_ASSOC_1-DAG: Decl[InstanceMethod]/Super:         f2(_: MissingAssoc.U) {|};
+// MISSING_ASSOC_1-DAG: Decl[InstanceMethod]/Super:         f3(_: MissingAssoc.V) {|};
+// MISSING_ASSOC_1: End completions

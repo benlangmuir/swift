@@ -26,15 +26,19 @@ add_swift_library(swiftFoundation ${SWIFT_SDK_OVERLAY_LIBRARY_BUILD_TYPES} IS_SD
   NSCoder.swift
   NSDate.swift
   NSDictionary.swift
+  NSError.mm
   NSError.swift
   NSExpression.swift
   NSFastEnumeration.swift
   NSGeometry.swift
   NSIndexSet.swift
+  NSItemProvider.swift
   NSNumber.swift
+  NSObject.swift
   NSPredicate.swift
   NSRange.swift
   NSSet.swift
+  NSSortDescriptor.swift
   NSString.swift
   NSStringAPI.swift
   NSStringEncodings.swift
@@ -44,6 +48,7 @@ add_swift_library(swiftFoundation ${SWIFT_SDK_OVERLAY_LIBRARY_BUILD_TYPES} IS_SD
   NSValue.swift.gyb
   PersonNameComponents.swift
   PlistEncoder.swift
+  Progress.swift
   ReferenceConvertible.swift
   String.swift
   TimeZone.swift
@@ -53,7 +58,7 @@ add_swift_library(swiftFoundation ${SWIFT_SDK_OVERLAY_LIBRARY_BUILD_TYPES} IS_SD
   UUID.swift
   CheckClass.mm
 
-  SWIFT_COMPILE_FLAGS "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}" "-Xllvm" "-sil-inline-generics" "-Xllvm" "-sil-partial-specialization"
+  SWIFT_COMPILE_FLAGS "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}" "-Xllvm" "-sil-inline-generics" "-Xllvm" "-sil-partial-specialization" "-swift-version" "3"
   LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"
 
   SWIFT_MODULE_DEPENDS_OSX Darwin CoreFoundation CoreGraphics Dispatch IOKit ObjectiveC # auto-updated

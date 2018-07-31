@@ -1,4 +1,4 @@
-// RUN: %target-run-simple-swift | %FileCheck %s
+// RUN: %target-run-simple-swift-swift3 | %FileCheck %s
 // REQUIRES: executable_test
 
 // REQUIRES: objc_interop
@@ -31,6 +31,9 @@ class Target : NSString {
     self.swiftValue = Guts()
     self.objcValue = ""
     super.init(coder: aDecoder)
+  }
+  required init(itemProviderData data: Data, typeIdentifier: String) throws {
+    fatalError("don't call this initializer")
   }
 
   func print() { 

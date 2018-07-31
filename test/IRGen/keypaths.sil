@@ -1,21 +1,36 @@
-// RUN: %target-swift-frontend -emit-ir %s | %FileCheck %s --check-prefix=CHECK --check-prefix=CHECK-%target-ptrsize
+
+// RUN: %empty-directory(%t)
+// -- Convert <i32 0x...> constants to decimal constants that LLVM will print
+// RUN: %{python} %utils/chex.py < %s > %t/keypaths.sil
+// RUN: %target-swift-frontend -module-name keypaths -emit-ir %s | %FileCheck %t/keypaths.sil --check-prefix=CHECK --check-prefix=CHECK-%target-ptrsize --check-prefix=CHECK-%target-os
 
 sil_stage canonical
 import Swift
 
-struct S {
+struct S: Hashable {
   var x: Int
   let y: String
   var z: C
   var reabstracted: () -> ()
+
+  var hashValue: Int { get }
+  static func ==(_: S, _: S) -> Bool
 }
-class C {
+class C: Hashable {
   final var x: Int
   final let y: String
   final var z: S
   var w: Int { get set }
 
   init()
+
+  var hashValue: Int { get }
+  static func ==(_: C, _: C) -> Bool
+}
+
+struct G<T> {
+  var x: T { get set }
+  subscript<U: Hashable>(x: U) -> T { get set }
 }
 
 sil_vtable C {}
@@ -27,110 +42,122 @@ sil_vtable C {}
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//               -- 0x8000_0018 - instantiable in-line, size 4
-// CHECK-SAME: i32 -2147483644,
+//               -- instantiable in-line, size 4
+// CHECK-SAME: <i32 0x8000_0004>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // -- offset of S.x
-// CHECK-SAME: i32 0 }>
+// CHECK-SAME: <i32 0x0100_0000> }>
 
 // -- %b: S.y
 // CHECK: [[KP_B:@keypath.*]] = private global <{ {{.*}} }> <{
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//               -- 0x8000_0018 - instantiable in-line, size 4
-// CHECK-SAME: i32 -2147483644,
+//               -- instantiable in-line, size 4
+// CHECK-SAME: <i32 0x8000_0004>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // -- offset of S.y
-// CHECK-32-SAME: i32 4 }>
-// CHECK-64-SAME: i32 8 }>
+// CHECK-32-SAME: <i32 0x0100_0004> }>
+// CHECK-64-SAME: <i32 0x0100_0008> }>
 
 // -- %c: S.z
 // CHECK: [[KP_C:@keypath.*]] = private global <{ {{.*}} }> <{
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//               -- 0x8000_0018 - instantiable in-line, size 4
-// CHECK-SAME: i32 -2147483644,
+//               -- instantiable in-line, size 4
+// CHECK-SAME: <i32 0x8000_0004>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // -- offset of S.z
-// CHECK-32-SAME: i32 16 }>
-// CHECK-64-SAME: i32 32 }>
+// CHECK-32-SAME: <i32 0x0100_0010> }>
+// CHECK-64-SAME: <i32 0x0100_0018> }>
 
 // -- %d: C.x
 // CHECK: [[KP_D:@keypath.*]] = private global <{ {{.*}} }> <{
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//               -- 0x8000_0018 - instantiable in-line, size 4
-// CHECK-SAME: i32 -2147483644,
-// -- 0x4000_0000 (class) + offset of C.x
-// CHECK-32-SAME: i32 1073741836 }>
-// CHECK-64-SAME: i32 1073741840 }>
+//               -- instantiable in-line, size 4
+// CHECK-SAME: <i32 0x8000_0004>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+// -- 0x0300_0000 (class) + offset of C.x
+// CHECK-32-SAME: <i32 0x0300_0008> }>
+// CHECK-64-SAME: <i32 0x0300_0010> }>
 
 // -- %e: C.y
 // CHECK: [[KP_E:@keypath.*]] = private global <{ {{.*}} }> <{
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//               -- 0x8000_0018 - instantiable in-line, size 4
-// CHECK-SAME: i32 -2147483644,
-// -- 0x4000_0000 (class) + offset of C.y
-// CHECK-32-SAME: i32 1073741840 }>
-// CHECK-64-SAME: i32 1073741848 }>
+//               -- instantiable in-line, size 4
+// CHECK-SAME: <i32 0x8000_0004>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+// -- 0x0300_0000 (class) + offset of C.y
+// CHECK-32-SAME: <i32 0x0300_000c> }>
+// CHECK-64-SAME: <i32 0x0300_0018> }>
 
 // -- %f: C.z
 // CHECK: [[KP_F:@keypath.*]] = private global <{ {{.*}} }> <{
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//               -- 0x8000_0018 - instantiable in-line, size 4
-// CHECK-SAME: i32 -2147483644,
-// -- 0x4000_0000 (class) + offset of C.z
-// CHECK-32-SAME: i32 1073741852 }>
-// CHECK-64-SAME: i32 1073741872 }>
+//               -- instantiable in-line, size 4
+// CHECK-SAME: <i32 0x8000_0004>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+// -- 0x0300_0000 (class) + offset of C.z
+// CHECK-32-SAME: <i32 0x0300_0018> }>
+// CHECK-64-SAME: <i32 0x0300_0028> }>
 
 // -- %g: S.z.x
 // CHECK: [[KP_G:@keypath.*]] = private global <{ {{.*}} }> <{
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//                  -- 0x8000_0010 - instantiable in-line, size 12
-// CHECK-32-SAME: i32 -2147483636,
-//                  -- 0x8000_0018 - instantiable in-line, size 16
-// CHECK-64-SAME: i32 -2147483632,
+//                  -- instantiable in-line, size 12
+// CHECK-32-SAME: <i32 0x8000_000c>,
+//                  -- instantiable in-line, size 20
+// CHECK-64-SAME: <i32 0x8000_0014>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // -- offset of S.z
-// CHECK-32-SAME: i32 16,
-// CHECK-64-SAME: i32 32,
+// CHECK-32-SAME: <i32 0x0100_0010>,
+// CHECK-64-SAME: <i32 0x0100_0018>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // CHECK: %swift.type* (i8*)*
-// -- 0x4000_0000 (class) + offset of C.x
-// CHECK-32-SAME: i32 1073741836 }>
-// CHECK-64-SAME: i32 1073741840 }>
+// -- 0x0300_0000 (class) + offset of C.x
+// CHECK-32-SAME: <i32 0x0300_0008> }>
+// CHECK-64-SAME: <i32 0x0300_0010> }>
 
 // -- %h: C.z.x
 // CHECK: [[KP_H:@keypath.*]] = private global <{ {{.*}} }> <{
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//                  -- 0x8000_0010 - instantiable in-line, size 12
-// CHECK-32-SAME: i32 -2147483636,
-//                  -- 0x8000_0018 - instantiable in-line, size 16
-// CHECK-64-SAME: i32 -2147483632,
-// -- 0x4000_0000 (class) + offset of C.z
-// CHECK-32-SAME: i32 1073741852,
-// CHECK-64-SAME: i32 1073741872,
+//                  -- instantiable in-line, size 12
+// CHECK-32-SAME: <i32 0x8000_000c>,
+//                  -- instantiable in-line, size 20
+// CHECK-64-SAME: <i32 0x8000_0014>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+// -- 0x0300_0000 (class) + offset of C.z
+// CHECK-32-SAME: <i32 0x0300_0018>,
+// CHECK-64-SAME: <i32 0x0300_0028>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // CHECK: %swift.type* (i8*)*
 // -- offset of S.x
-// CHECK-SAME: i32 0 }>
+// CHECK-SAME: <i32 0x0100_0000> }>
 
 // -- %k: computed
 // CHECK: [[KP_K:@keypath.*]] = private global <{ {{.*}} }> <{
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//              -- 0x8000_0014 - instantiable in-line, size 20
-// CHECK-64-SAME: i32 -2147483628,
-//              -- 0x8000_000c - instantiable in-line, size 12
-// CHECK-32-SAME: i32 -2147483636,
-// -- 0x2000_0000 - computed, get-only, identified by function pointer, no args
-// CHECK-SAME: i32 536870912,
+//              -- instantiable in-line, size 24
+// CHECK-64-SAME: <i32 0x8000_0018>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+//              -- instantiable in-line, size 12
+// CHECK-32-SAME: <i32 0x8000_000c>,
+// -- computed, get-only, identified by function pointer, no args
+// CHECK-SAME: <i32 0x0200_0000>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // CHECK-SAME: void ()* @k_id,
 // CHECK-SAME: void (%TSi*, %T8keypaths1SV*)* @k_get }>
 
@@ -139,12 +166,14 @@ sil_vtable C {}
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//              -- 0x8000_001c - instantiable in-line, size 28
-// CHECK-64-SAME: i32 -2147483620,
-//              -- 0x8000_0010 - instantiable in-line, size 16
-// CHECK-32-SAME: i32 -2147483632,
-// -- 0x2a00_0000 - computed, settable, nonmutating, identified by vtable, no args
-// CHECK-SAME: i32 704643072,
+//              -- instantiable in-line, size 32
+// CHECK-64-SAME: <i32 0x8000_0020>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+//              -- instantiable in-line, size 16
+// CHECK-32-SAME: <i32 0x8000_0010>,
+// -- computed, settable, nonmutating, identified by vtable, no args
+// CHECK-SAME: <i32 0x0250_0000>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // CHECK-SAME: [[WORD]]
 // CHECK-SAME: void (%TSi*, %T8keypaths1CC**)* @l_get,
 // CHECK-SAME: void (%TSi*, %T8keypaths1CC**)* @l_set }>
@@ -154,12 +183,14 @@ sil_vtable C {}
 // CHECK-SAME: [[WORD]] 0,
 // CHECK-SAME: %swift.type* (i8*)*
 // CHECK-SAME: %swift.type* (i8*)*
-//              -- 0x8000_001c - instantiable in-line, size 28
-// CHECK-64-SAME: i32 -2147483620,
-//              -- 0x8000_0010 - instantiable in-line, size 16
-// CHECK-32-SAME: i32 -2147483632,
-// -- 0x3c00_0000 - computed, settable, nonmutating, identified by property offset, no args
-// CHECK-SAME: i32 1006632960,
+//              -- instantiable in-line, size 32
+// CHECK-64-SAME: <i32 0x8000_0020>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+//              -- instantiable in-line, size 16
+// CHECK-32-SAME: <i32 0x8000_0010>,
+// -- computed, settable, nonmutating, identified by property offset, no args
+// CHECK-SAME: <i32 0x02e0_0000>,
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
 // CHECK-SAME: [[WORD]]
 // CHECK-SAME: void (%swift.function*, %T8keypaths1SV*)* @m_get,
 // CHECK-SAME: void (%swift.function*, %T8keypaths1SV*)* @m_set }>
@@ -172,10 +203,11 @@ sil_vtable C {}
 // CHECK-SAME: %swift.type* (i8*)* [[I_GET_A:@[a-z_.0-9]+]],
 //             -- size 8
 // CHECK-SAME: i32 8,
-//             -- 0x1ffffffe - struct with runtime-resolved offset
-// CHECK-SAME: i32 536870910,
-// CHECK-32-SAME: i32 12 }>
-// CHECK-64-SAME: i32 24 }>
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+//             -- struct with runtime-resolved offset
+// CHECK-SAME: <i32 0x01fffffe>,
+// CHECK-32-SAME: i32 16 }>
+// CHECK-64-SAME: i32 32 }>
 
 // -- %j: Gen<A>.y
 // CHECK: [[KP_J:@keypath.*]] = private global <{ {{.*}} }> <{
@@ -184,12 +216,27 @@ sil_vtable C {}
 // CHECK-SAME: %swift.type* (i8*)* [[J_GET_A:@[a-z_.0-9]+]],
 //             -- size 8
 // CHECK-SAME: i32 8,
-//             -- 0x1ffffffe - struct with runtime-resolved offset
-// CHECK-SAME: i32 536870910,
-// CHECK-32-SAME: i32 16 }>
-// CHECK-64-SAME: i32 32 }>
+// CHECK-64-SAME: [4 x i8] zeroinitializer,
+//             -- struct with runtime-resolved offset
+// CHECK-SAME: <i32 0x01fffffe>,
+// CHECK-32-SAME: i32 20 }>
+// CHECK-64-SAME: i32 36 }>
 
-// CHECK-LABEL: define{{( protected)?}} swiftcc void @stored_property_fixed_offsets()
+// -- %t
+// CHECK: [[KP_T:@keypath.*]] = private global <{ {{.*}} }> <{ {{.*}} i32 1, {{.*}} @"$S8keypaths1GV1xxvpMV",
+// CHECK-SAME:   %swift.type* (i8*)* [[T_GET_TYPE_A:@[A-Za-z0-9._]*]],
+//            -- computed get-only property
+// CHECK-SAME:   <i32 0x0208_0000>
+
+// -- %u
+// CHECK: [[KP_U:@keypath.*]] = private global <{ {{.*}} }> <{ {{.*}} i32 3, {{.*}} @"$S8keypaths1GVyxqd__cSHRd__luipMV",
+// CHECK-SAME:   %swift.type* (i8*)* [[U_GET_TYPE_A:@[A-Za-z0-9._]*]],
+// CHECK-SAME:   %swift.type* (i8*)* [[U_GET_TYPE_B:@[A-Za-z0-9._]*]],
+// CHECK-SAME:   i8** (i8*)* [[U_GET_WITNESS_HASHABLE:@[A-Za-z0-9._]*]],
+//            -- computed get-only property
+// CHECK-SAME:   <i32 0x0208_0000>
+
+// CHECK-LABEL: define{{( dllexport)?}}{{( protected)?}} swiftcc void @stored_property_fixed_offsets()
 sil @stored_property_fixed_offsets : $@convention(thin) () -> () {
 entry:
   // CHECK: call %swift.refcounted* @swift_getKeyPath(i8* bitcast ({{.*}} [[KP_A]] to i8*), i8* undef)
@@ -211,21 +258,21 @@ entry:
   // CHECK: call %swift.refcounted* @swift_getKeyPath(i8* bitcast ({{.*}} [[KP_H]] to i8*), i8* undef)
   %h = keypath $KeyPath<C, Int>, (root $C; stored_property #C.z : $S; stored_property #S.x : $Int)
 
-  %k = keypath $KeyPath<S, Int>, (root $S; gettable_property $Int, id @k_id : $@convention(thin) () -> (), getter @k_get : $@convention(thin) (@in S) -> @out Int)
-  %l = keypath $KeyPath<C, Int>, (root $C; settable_property $Int, id #C.w!getter.1, getter @l_get : $@convention(thin) (@in C) -> @out Int, setter @l_set : $@convention(thin) (@in Int, @in C) -> ())
-  %m = keypath $KeyPath<S, () -> ()>, (root $S; settable_property $() -> (), id ##S.reabstracted, getter @m_get : $@convention(thin) (@in S) -> @out @callee_owned (@in ()) -> @out (), setter @m_set : $@convention(thin) (@in @callee_owned (@in ()) -> @out (), @inout S) -> ())
+  %k = keypath $KeyPath<S, Int>, (root $S; gettable_property $Int, id @k_id : $@convention(thin) () -> (), getter @k_get : $@convention(thin) (@in_guaranteed S) -> @out Int)
+  %l = keypath $KeyPath<C, Int>, (root $C; settable_property $Int, id #C.w!getter.1, getter @l_get : $@convention(thin) (@in_guaranteed C) -> @out Int, setter @l_set : $@convention(thin) (@in_guaranteed Int, @in_guaranteed C) -> ())
+  %m = keypath $KeyPath<S, () -> ()>, (root $S; settable_property $() -> (), id ##S.reabstracted, getter @m_get : $@convention(thin) (@in_guaranteed S) -> @out @callee_guaranteed (@in_guaranteed ()) -> @out (), setter @m_set : $@convention(thin) (@in_guaranteed @callee_guaranteed (@in_guaranteed ()) -> @out (), @inout S) -> ())
 
   return undef : $()
 }
 
 sil @k_id : $@convention(thin) () -> ()
-sil @k_get : $@convention(thin) (@in S) -> @out Int
+sil @k_get : $@convention(thin) (@in_guaranteed S) -> @out Int
 
-sil @l_get : $@convention(thin) (@in C) -> @out Int
-sil @l_set : $@convention(thin) (@in Int, @in C) -> ()
+sil @l_get : $@convention(thin) (@in_guaranteed C) -> @out Int
+sil @l_set : $@convention(thin) (@in_guaranteed Int, @in_guaranteed C) -> ()
 
-sil @m_get : $@convention(thin) (@in S) -> @out @callee_owned (@in ()) -> @out ()
-sil @m_set : $@convention(thin) (@in @callee_owned (@in ()) -> @out (), @inout S) -> ()
+sil @m_get : $@convention(thin) (@in_guaranteed S) -> @out @callee_guaranteed (@in_guaranteed ()) -> @out ()
+sil @m_set : $@convention(thin) (@in_guaranteed @callee_guaranteed (@in_guaranteed ()) -> @out (), @inout S) -> ()
 
 struct Gen<T, U> {
   var x: T
@@ -236,26 +283,24 @@ struct Foo<T> {
   var foo: T
 }
 
-// CHECK-LABEL: define{{( protected)?}} swiftcc void @stored_property_generics(%swift.type* %T, %swift.type* %U)
+// CHECK-LABEL: define{{( dllexport)?}}{{( protected)?}} swiftcc void @stored_property_generics(%swift.type* %T, %swift.type* %U)
 sil @stored_property_generics : $@convention(thin) <T, U> () -> () {
 entry:
-  // CHECK: [[PTR:%.*]] = bitcast [1 x %swift.type*]* [[ARGS:%.*]] to
+  // CHECK: [[PTR:%.*]] = bitcast i8* [[ARGS:%.*]] to
   // CHECK: store %swift.type* %T, %swift.type** [[PTR]]
-  // CHECK: [[ARGS_I8:%.*]] = bitcast [1 x %swift.type*]* [[ARGS]] to
-  // CHECK: call %swift.refcounted* @swift_getKeyPath(i8* bitcast ({{.*}} [[KP_I]] to i8*), i8* [[ARGS_I8]])
+  // CHECK: call %swift.refcounted* @swift_getKeyPath(i8* bitcast ({{.*}} [[KP_I]] to i8*), i8* [[ARGS]])
   %i = keypath $KeyPath<Gen<T,T>, T>, <A> (root $Gen<A, A>; stored_property #Gen.x : $A) <T>
 
-  // CHECK: [[PTR:%.*]] = bitcast [1 x %swift.type*]* [[ARGS:%.*]] to
+  // CHECK: [[PTR:%.*]] = bitcast i8* [[ARGS:%.*]] to
   // CHECK: store %swift.type* %U, %swift.type** [[PTR]]
-  // CHECK: [[ARGS_I8:%.*]] = bitcast [1 x %swift.type*]* [[ARGS]] to
-  // CHECK: call %swift.refcounted* @swift_getKeyPath(i8* bitcast ({{.*}} [[KP_J]] to i8*), i8* [[ARGS_I8]])
+  // CHECK: call %swift.refcounted* @swift_getKeyPath(i8* bitcast ({{.*}} [[KP_J]] to i8*), i8* [[ARGS]])
   %j = keypath $KeyPath<Gen<U,U>, U>, <A> (root $Gen<A, A>; stored_property #Gen.y : $A) <U>
 
-  // CHECK: [[PTR:%.*]] = bitcast [1 x %swift.type*]* [[ARGS:%.*]] to
-  // CHECK: [[FOO_T:%.*]] = call %swift.type* @_T08keypaths3FooVMa(%swift.type* %T)
+  // CHECK: [[PTR:%.*]] = bitcast i8* [[ARGS:%.*]] to
+  // CHECK: [[T0:%.*]] = call swiftcc %swift.metadata_response @"$S8keypaths3FooVMa"([[WORD]] 0, %swift.type* %T)
+  // CHECK: [[FOO_T:%.*]] = extractvalue %swift.metadata_response [[T0]], 0
   // CHECK: store %swift.type* [[FOO_T]], %swift.type** [[PTR]]
-  // CHECK: [[ARGS_I8:%.*]] = bitcast [1 x %swift.type*]* [[ARGS]] to
-  // CHECK: call %swift.refcounted* @swift_getKeyPath(i8* bitcast ({{.*}} [[KP_I]] to i8*), i8* [[ARGS_I8]])
+  // CHECK: call %swift.refcounted* @swift_getKeyPath(i8* bitcast ({{.*}} [[KP_I]] to i8*), i8* [[ARGS]])
   %i2 = keypath $KeyPath<Gen<Foo<T>,Foo<T>>, Foo<T>>, <A> (root $Gen<A, A>; stored_property #Gen.x : $A) <Foo<T>>
 
   return undef : $()
@@ -264,7 +309,8 @@ entry:
 // CHECK: define private %swift.type* [[I_GET_GEN_A_A]](i8*)
 // CHECK:   [[BUF:%.*]] = bitcast i8* %0
 // CHECK:   [[A:%.*]] = load %swift.type*, %swift.type** [[BUF]]
-// CHECK:   [[GEN:%.*]] = call %swift.type* @_T08keypaths3GenVMa(%swift.type* [[A]], %swift.type* [[A]])
+// CHECK:   [[T0:%.*]] = call swiftcc %swift.metadata_response @"$S8keypaths3GenVMa"([[WORD]] 0, %swift.type* [[A]], %swift.type* [[A]])
+// CHECK:   [[GEN:%.*]] = extractvalue %swift.metadata_response [[T0]], 0
 // CHECK:   ret %swift.type* [[GEN]]
 
 
@@ -272,3 +318,143 @@ entry:
 // CHECK:   [[BUF:%.*]] = bitcast i8* %0
 // CHECK:   [[A:%.*]] = load %swift.type*, %swift.type** [[BUF]]
 // CHECK:   ret %swift.type* [[A]]
+
+// CHECK-LABEL: define{{( dllexport)?}}{{( protected)?}} swiftcc void @computed_property_generics
+sil @computed_property_generics : $@convention(thin) <T, U> () -> () {
+entry:
+  %n = keypath $WritableKeyPath<T, U>, <UUU, TTT> (root $TTT; settable_property $UUU, id @n_get : $@convention(thin) <UU, TT> (@in_guaranteed TT) -> @out UU, getter @n_get : $@convention(thin) <UU, TT> (@in_guaranteed TT) -> @out UU, setter @n_set : $@convention(thin) <UU, TT> (@in_guaranteed UU, @in_guaranteed TT) -> ()) <U, T>
+
+  return undef : $()
+}
+
+sil @n_get : $@convention(thin) <UU, TT> (@in_guaranteed TT) -> @out UU
+sil @n_set : $@convention(thin) <UU, TT> (@in_guaranteed UU, @in_guaranteed TT) -> ()
+
+sil @computed_property_indices : $@convention(thin) (C, S, C, S, C, S) -> () {
+entry(%0 : @unowned $C, %1 : @unowned $S, %2 : @unowned $C, %3 : @unowned $S, %4 : @unowned $C, %5 : @unowned $S):
+  %o = keypath $WritableKeyPath<S, C>, (
+    root $S;
+    settable_property $C,
+      id @o_get : $@convention(thin) (@in_guaranteed S, UnsafeRawPointer) -> @out C,
+      getter @o_get : $@convention(thin) (@in_guaranteed S, UnsafeRawPointer) -> @out C,
+      setter @o_set : $@convention(thin) (@in_guaranteed C, @in_guaranteed S, UnsafeRawPointer) -> (),
+      indices [%$0 : $C : $C],
+      indices_equals @o_equals : $@convention(thin) (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @o_hash : $@convention(thin) (UnsafeRawPointer) -> Int
+  ) (%0)
+  %p = keypath $WritableKeyPath<S, C>, (
+    root $S;
+    settable_property $C,
+      id @o_get : $@convention(thin) (@in_guaranteed S, UnsafeRawPointer) -> @out C,
+      getter @o_get : $@convention(thin) (@in_guaranteed S, UnsafeRawPointer) -> @out C,
+      setter @o_set : $@convention(thin) (@in_guaranteed C, @in_guaranteed S, UnsafeRawPointer) -> (),
+      indices [%$0 : $S : $S, %$1 : $C : $C],
+      indices_equals @o_equals : $@convention(thin) (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @o_hash : $@convention(thin) (UnsafeRawPointer) -> Int
+  ) (%1, %2)
+  %r = keypath $WritableKeyPath<S, S>, (
+    root $S;
+    settable_property $C,
+      id @o_get : $@convention(thin) (@in_guaranteed S, UnsafeRawPointer) -> @out C,
+      getter @o_get : $@convention(thin) (@in_guaranteed S, UnsafeRawPointer) -> @out C,
+      setter @o_set : $@convention(thin) (@in_guaranteed C, @in_guaranteed S, UnsafeRawPointer) -> (),
+      indices [%$0 : $S : $S, %$1 : $C : $C],
+      indices_equals @o_equals : $@convention(thin) (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @o_hash : $@convention(thin) (UnsafeRawPointer) -> Int;
+    settable_property $S,
+      id @r_get : $@convention(thin) (@in_guaranteed C, UnsafeRawPointer) -> @out S,
+      getter @r_get : $@convention(thin) (@in_guaranteed C, UnsafeRawPointer) -> @out S,
+      setter @r_set : $@convention(thin) (@in_guaranteed S, @in_guaranteed C, UnsafeRawPointer) -> (),
+      indices [%$2 : $S : $S],
+      indices_equals @o_equals : $@convention(thin) (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @o_hash : $@convention(thin) (UnsafeRawPointer) -> Int
+  ) (%3, %4, %5)
+
+  return undef : $()
+}
+
+sil @o_get : $@convention(thin) (@in_guaranteed S, UnsafeRawPointer) -> @out C
+sil @o_set : $@convention(thin) (@in_guaranteed C, @in_guaranteed S, UnsafeRawPointer) -> ()
+sil @o_equals : $@convention(thin) (UnsafeRawPointer, UnsafeRawPointer) -> Bool
+sil @o_hash : $@convention(thin) (UnsafeRawPointer) -> Int
+
+sil @r_get : $@convention(thin) (@in_guaranteed C, UnsafeRawPointer) -> @out S
+sil @r_set : $@convention(thin) (@in_guaranteed S, @in_guaranteed C, UnsafeRawPointer) -> ()
+
+sil @generic_computed_property_indices : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed A, @in_guaranteed B, @in_guaranteed A, @in_guaranteed B, @in_guaranteed A, @in_guaranteed B) -> () {
+entry(%0 : @trivial $*A, %1 : @trivial $*B, %2 : @trivial $*A, %3 : @trivial $*B, %4 : @trivial $*A, %5 : @trivial $*B):
+  %s = keypath $WritableKeyPath<A, B>, <X: Hashable, Y: Hashable> (
+    root $X;
+    settable_property $Y,
+      id @s_get : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed T, UnsafeRawPointer) -> @out U,
+      getter @s_get : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed T, UnsafeRawPointer) -> @out U,
+      setter @s_set : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed U, @in_guaranteed T, UnsafeRawPointer) -> (),
+      indices [%$0 : $X : $*X],
+      indices_equals @s_equals : $@convention(thin) <T: Hashable, U: Hashable> (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @s_hash : $@convention(thin) <T: Hashable, U: Hashable> (UnsafeRawPointer) -> Int
+  ) <A, B> (%0)
+  %t = keypath $WritableKeyPath<A, B>, <X: Hashable, Y: Hashable> (
+    root $X;
+    settable_property $Y,
+      id @s_get : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed T, UnsafeRawPointer) -> @out U,
+      getter @s_get : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed T, UnsafeRawPointer) -> @out U,
+      setter @s_set : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed U, @in_guaranteed T, UnsafeRawPointer) -> (),
+      indices [%$0 : $Y : $*Y, %$1 : $X : $*X],
+      indices_equals @s_equals : $@convention(thin) <T: Hashable, U: Hashable> (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @s_hash : $@convention(thin) <T: Hashable, U: Hashable> (UnsafeRawPointer) -> Int
+  ) <A, B> (%1, %2)
+  %v = keypath $WritableKeyPath<A, A>, <X: Hashable, Y: Hashable> (
+    root $X;
+    settable_property $Y,
+      id @s_get : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed T, UnsafeRawPointer) -> @out U,
+      getter @s_get : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed T, UnsafeRawPointer) -> @out U,
+      setter @s_set : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed U, @in_guaranteed T, UnsafeRawPointer) -> (),
+      indices [%$0 : $Y : $*Y, %$1 : $X : $*X],
+      indices_equals @s_equals : $@convention(thin) <T: Hashable, U: Hashable> (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @s_hash : $@convention(thin) <T: Hashable, U: Hashable> (UnsafeRawPointer) -> Int;
+    settable_property $X,
+      id @v_get : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed U, UnsafeRawPointer) -> @out T,
+      getter @v_get : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed U, UnsafeRawPointer) -> @out T,
+      setter @v_set : $@convention(thin) <T: Hashable, U: Hashable> (@in_guaranteed T, @in_guaranteed U, UnsafeRawPointer) -> (),
+      indices [%$2 : $Y : $*Y],
+      indices_equals @s_equals : $@convention(thin) <T: Hashable, U: Hashable> (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @s_hash : $@convention(thin) <T: Hashable, U: Hashable> (UnsafeRawPointer) -> Int
+  ) <A, B> (%3, %4, %5)
+
+  return undef : $()
+}
+
+sil @generic_external : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed A, @in_guaranteed B, @in_guaranteed A, @in_guaranteed B, @in_guaranteed A, @in_guaranteed B) -> () {
+entry(%0 : @trivial $*A, %1 : @trivial $*B, %2 : @trivial $*A, %3 : @trivial $*B, %4 : @trivial $*A, %5 : @trivial $*B):
+  %t = keypath $KeyPath<G<B>, B>, <Z> (
+    root $G<Z>;
+    gettable_property $Z,
+      id @g_x_get : $@convention(thin) <Z> (@in_guaranteed G<Z>) -> @out Z,
+      getter @g_x_get : $@convention(thin) <Z> (@in_guaranteed G<Z>) -> @out Z,
+      external #G.x<Z>
+  ) <B>
+
+  %u = keypath $KeyPath<G<A>, A>, <X: Hashable, Y: Hashable> (
+    root $G<Y>;
+    gettable_property $Y,
+      id @g_subscript_get : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed G<B>, UnsafeRawPointer) -> @out B,
+      getter @g_subscript_get : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed G<B>, UnsafeRawPointer) -> @out B,
+      indices [%$0 : $X : $*X],
+      indices_equals @s_equals : $@convention(thin) <A: Hashable, B: Hashable> (UnsafeRawPointer, UnsafeRawPointer) -> Bool,
+      indices_hash @s_hash : $@convention(thin) <A: Hashable, B: Hashable> (UnsafeRawPointer) -> Int,
+      external #G.subscript<Y, X>
+  ) <B, A> (%1)
+
+  return undef : $()
+}
+
+sil @s_get : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed A, UnsafeRawPointer) -> @out B
+sil @s_set : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed B, @in_guaranteed A, UnsafeRawPointer) -> ()
+sil @s_equals : $@convention(thin) <A: Hashable, B: Hashable> (UnsafeRawPointer, UnsafeRawPointer) -> Bool
+sil @s_hash : $@convention(thin) <A: Hashable, B: Hashable> (UnsafeRawPointer) -> Int
+
+sil @v_get : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed B, UnsafeRawPointer) -> @out A
+sil @v_set : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed A, @in_guaranteed B, UnsafeRawPointer) -> ()
+
+sil @g_x_get : $@convention(thin) <Z> (@in_guaranteed G<Z>) -> @out Z
+sil @g_subscript_get : $@convention(thin) <A: Hashable, B: Hashable> (@in_guaranteed G<B>, UnsafeRawPointer) -> @out B

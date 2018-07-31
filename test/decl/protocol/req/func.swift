@@ -1,4 +1,4 @@
-// RUN: %target-typecheck-verify-swift
+// RUN: %target-typecheck-verify-swift -enable-objc-interop
 
 // Test function requirements within protocols, as well as conformance to
 // said protocols.
@@ -193,6 +193,29 @@ protocol P6 {
 struct X6 : P6 { // expected-error{{type 'X6' does not conform to protocol 'P6'}}
   func foo(_ x: Missing) { } // expected-error{{use of undeclared type 'Missing'}}
   func bar() { } // expected-note{{candidate has non-matching type '() -> ()'}}
+}
+
+protocol P6Ownership {
+  func thunk__shared(_ x: __shared Int)
+  func mismatch__shared(_ x: Int)
+  func mismatch__owned(x: Int)
+  func thunk__owned__owned(x: __owned Int)
+
+  __consuming func inherits__consuming(x: Int)
+  func mismatch__consuming(x: Int)
+  __consuming func mismatch__consuming_mutating(x: Int) // expected-note {{protocol requires function 'mismatch__consuming_mutating(x:)' with type '(Int) -> ()'}}
+  mutating func mismatch__mutating_consuming(x: Int)
+}
+struct X6Ownership : P6Ownership { // expected-error{{type 'X6Ownership' does not conform to protocol 'P6Ownership'}}
+  func thunk__shared(_ x: Int) { } // OK
+  func mismatch__shared(_ x: __shared Int) { } // OK
+  func mismatch__owned(x: __owned Int) { } // OK
+  func thunk__owned__owned(x: Int) { } // OK
+
+  func inherits__consuming(x: Int) { } // OK
+  __consuming func mismatch__consuming(x: Int) { } // OK
+  mutating func mismatch__consuming_mutating(x: Int) { } // expected-note {{candidate is marked 'mutating' but protocol does not allow it}}
+  __consuming func mismatch__mutating_consuming(x: Int) { } // OK - '__consuming' acts as a counterpart to 'nonmutating'
 }
 
 protocol P7 {

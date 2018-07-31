@@ -59,6 +59,7 @@ extension Decimal {
     public mutating func formTruncatingRemainder(dividingBy other: Decimal) { fatalError("Decimal does not yet fully adopt FloatingPoint") }
 
     public mutating func negate() {
+        guard _length != 0 else { return }
         _isNegative = _isNegative == 0 ? 1 : 0
     }
 
@@ -205,35 +206,43 @@ extension Decimal : ExpressibleByIntegerLiteral {
 
 extension Decimal : SignedNumeric {
   public var magnitude: Decimal {
-    return Decimal(
-      _exponent: self._exponent, _length: self._length,
-       _isNegative: 0, _isCompact: self._isCompact,
-       _reserved: 0, _mantissa: self._mantissa)
+      return Decimal(
+          _exponent: self._exponent, _length: self._length,
+          _isNegative: 0, _isCompact: self._isCompact,
+          _reserved: 0, _mantissa: self._mantissa)
   }
 
   // FIXME(integers): implement properly
   public init?<T : BinaryInteger>(exactly source: T) {
-    fatalError()
+      fatalError()
   }
 
   public static func +=(_ lhs: inout Decimal, _ rhs: Decimal) {
       var rhs = rhs
-      NSDecimalAdd(&lhs, &lhs, &rhs, .plain)
+      _ = withUnsafeMutablePointer(to: &lhs) {
+          NSDecimalAdd($0, $0, &rhs, .plain)
+      }
   }
 
   public static func -=(_ lhs: inout Decimal, _ rhs: Decimal) {
       var rhs = rhs
-      NSDecimalSubtract(&lhs, &lhs, &rhs, .plain)
+      _ = withUnsafeMutablePointer(to: &lhs) {
+          NSDecimalSubtract($0, $0, &rhs, .plain)
+      }
   }
 
   public static func *=(_ lhs: inout Decimal, _ rhs: Decimal) {
       var rhs = rhs
-      NSDecimalMultiply(&lhs, &lhs, &rhs, .plain)
+      _ = withUnsafeMutablePointer(to: &lhs) {
+          NSDecimalMultiply($0, $0, &rhs, .plain)
+      }
   }
 
   public static func /=(_ lhs: inout Decimal, _ rhs: Decimal) {
       var rhs = rhs
-      NSDecimalDivide(&lhs, &lhs, &rhs, .plain)
+      _ = withUnsafeMutablePointer(to: &lhs) {
+          NSDecimalDivide($0, $0, &rhs, .plain)
+      }
   }
 }
 
@@ -241,25 +250,25 @@ extension Decimal {
   @available(swift, obsoleted: 4, message: "Please use arithmetic operators instead")
   @_transparent
   public mutating func add(_ other: Decimal) {
-    self += other
+      self += other
   }
 
   @available(swift, obsoleted: 4, message: "Please use arithmetic operators instead")
   @_transparent
   public mutating func subtract(_ other: Decimal) {
-    self -= other
+      self -= other
   }
 
   @available(swift, obsoleted: 4, message: "Please use arithmetic operators instead")
   @_transparent
   public mutating func multiply(by other: Decimal) {
-    self *= other
+      self *= other
   }
 
   @available(swift, obsoleted: 4, message: "Please use arithmetic operators instead")
   @_transparent
   public mutating func divide(by other: Decimal) {
-    self /= other
+      self /= other
   }
 }
 
@@ -304,6 +313,7 @@ extension Decimal {
         } else if value == 0.0 {
             self = Decimal(_exponent: 0, _length: 0, _isNegative: 0, _isCompact: 0, _reserved: 0, _mantissa: (0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000))
         } else {
+            self.init() // zero-initialize everything
             let negative = value < 0
             var val = negative ? -1 * value : value
             var exponent = 0
@@ -319,7 +329,6 @@ extension Decimal {
             
             var i = UInt32(0)
             // this is a bit ugly but it is the closest approximation of the C initializer that can be expressed here.
-            _mantissa = (0, 0, 0, 0, 0, 0, 0, 0)
             while mantissa != 0 && i < 8 /* NSDecimalMaxSize */ {
                 switch i {
                     case 0:
@@ -488,12 +497,12 @@ extension Decimal : Codable {
         mantissa.6 = try mantissaContainer.decode(CUnsignedShort.self)
         mantissa.7 = try mantissaContainer.decode(CUnsignedShort.self)
 
-        self.init(_exponent: exponent,
-                  _length: length,
-                  _isNegative: CUnsignedInt(isNegative ? 1 : 0),
-                  _isCompact: CUnsignedInt(isCompact ? 1 : 0),
-                  _reserved: 0,
-                  _mantissa: mantissa)
+        self = Decimal(_exponent: exponent,
+                       _length: length,
+                       _isNegative: CUnsignedInt(isNegative ? 1 : 0),
+                       _isCompact: CUnsignedInt(isCompact ? 1 : 0),
+                       _reserved: 0,
+                       _mantissa: mantissa)
     }
 
     public func encode(to encoder: Encoder) throws {

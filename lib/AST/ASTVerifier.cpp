@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2018 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -103,9 +103,9 @@ std::pair<bool, Expr *> dispatchVisitPreExprHelper(
         is_apply_expr<typename std::remove_pointer<Kind>::type>::value,
         Kind>::type node) {
   if (V.shouldVerify(node)) {
-    // Whitelist any inout_to_pointer or array_to_pointer that we see in
+    // Record any inout_to_pointer or array_to_pointer that we see in
     // the proper position.
-    V.updateExprToPointerWhitelist(node, node->getArg());
+    V.maybeRecordValidPointerConversion(node, node->getArg());
     return {true, node};
   }
   V.cleanup(node);
@@ -119,9 +119,9 @@ std::pair<bool, Expr *> dispatchVisitPreExprHelper(
         is_autoclosure_expr<typename std::remove_pointer<Kind>::type>::value,
         Kind>::type node) {
   if (V.shouldVerify(node)) {
-    // Whitelist any inout_to_pointer or array_to_pointer that we see in
+    // Record any inout_to_pointer or array_to_pointer that we see in
     // the proper position.
-    V.updateExprToPointerWhitelist(node, node->getSingleExpressionBody());
+    V.maybeRecordValidPointerConversion(node, node->getSingleExpressionBody());
     return {true, node};
   }
   V.cleanup(node);
@@ -170,17 +170,27 @@ struct LazyGenericEnvironment {
     if (isLazy()) return true;
 
     if (auto genericEnv = storage.dyn_cast<GenericEnvironment *>())
-      return genericEnv->containsPrimaryArchetype(archetype);
+      return archetype->getGenericEnvironment() == genericEnv;
 
     if (auto dc = storage.dyn_cast<DeclContext *>()) {
       if (auto genericEnv = dc->getGenericEnvironmentOfContext())
-        return genericEnv->containsPrimaryArchetype(archetype);
+        return archetype->getGenericEnvironment() == genericEnv;
     }
 
     return false;
   }
 };
 
+namespace {
+  /// Retrieve the "overridden" declaration of this declaration, but only if
+  // it's already been computed.
+  template<typename T>
+  T *getOverriddenDeclIfAvailable(T *decl) {
+    if (!decl->overriddenDeclsComputed()) return nullptr;
+
+    return cast_or_null<T>(decl->getOverriddenDecl());
+  }
+}
 class Verifier : public ASTWalker {
   PointerUnion<ModuleDecl *, SourceFile *> M;
   ASTContext &Ctx;
@@ -219,8 +229,8 @@ class Verifier : public ASTWalker {
   ///
   /// Any other inout to pointer expr that we see is invalid and the verifier
   /// will assert.
-  llvm::DenseSet<InOutToPointerExpr *> WhitelistedInOutToPointerExpr;
-  llvm::DenseSet<ArrayToPointerExpr *> WhitelistedArrayToPointerExpr;
+  llvm::DenseSet<InOutToPointerExpr *> ValidInOutToPointerExprs;
+  llvm::DenseSet<ArrayToPointerExpr *> ValidArrayToPointerExprs;
 
   /// A key into ClosureDiscriminators is a combination of a
   /// ("canonicalized") local DeclContext* and a flag for whether to
@@ -445,6 +455,14 @@ public:
     bool shouldVerify(Pattern *S) { return true; }
     bool shouldVerify(Decl *S) { return true; }
 
+    bool shouldVerify(TypeAliasDecl *typealias) {
+      // Don't verify type aliases formed by the debugger; they violate some
+      // AST invariants involving archetypes.
+      if (typealias->isDebuggerAlias()) return false;
+
+      return true;
+    }
+
     // Default cases for whether we should verify a checked subtree.
     bool shouldVerifyChecked(Expr *E) {
       if (!E->getType()) {
@@ -462,6 +480,28 @@ public:
     bool shouldVerifyChecked(Stmt *S) { return true; }
     bool shouldVerifyChecked(Pattern *S) { return S->hasType(); }
     bool shouldVerifyChecked(Decl *S) { return true; }
+
+    // Only verify functions if they have bodies we can safely walk.
+    // FIXME: This is a bit of a hack; we should be able to check the
+    // invariants of a parsed body as well.
+    bool shouldVerify(AbstractFunctionDecl *afd) {
+      switch (afd->getBodyKind()) {
+      case AbstractFunctionDecl::BodyKind::None:
+      case AbstractFunctionDecl::BodyKind::TypeChecked:
+      case AbstractFunctionDecl::BodyKind::Skipped:
+      case AbstractFunctionDecl::BodyKind::MemberwiseInitializer:
+        return true;
+
+      case AbstractFunctionDecl::BodyKind::Unparsed:
+      case AbstractFunctionDecl::BodyKind::Parsed:
+      case AbstractFunctionDecl::BodyKind::Synthesize:
+        if (auto SF = dyn_cast<SourceFile>(afd->getModuleScopeContext())) {
+          return SF->ASTStage < SourceFile::TypeChecked;
+        }
+
+        return false;
+      }
+    }
 
     // Default cases for cleaning up as we exit a node.
     void cleanup(Expr *E) { }
@@ -528,16 +568,6 @@ public:
         }
         return;
       }
-
-      // Require an access kind to be set on every l-value expression.
-      // Note that the empty tuple type is assignable but usually isn't
-      // an l-value, so we have to be conservative there.
-      if (E->getType()->isLValueType() != E->hasLValueAccessKind() &&
-          !(E->hasLValueAccessKind() && E->getType()->isAssignableType())) {
-        Out << "l-value expression does not have l-value access kind set\n";
-        E->print(Out);
-        abort();
-      }
     }
     void verifyChecked(Stmt *S) {}
     void verifyChecked(Pattern *P) { }
@@ -548,9 +578,9 @@ public:
       verifyChecked(type, visitedArchetypes);
     }
 
-    void verifyChecked(
-           Type type,
-           llvm::SmallPtrSet<ArchetypeType *, 4> &visitedArchetypes) {
+    void
+    verifyChecked(Type type,
+                  llvm::SmallPtrSetImpl<ArchetypeType *> &visitedArchetypes) {
       if (!type)
         return;
 
@@ -560,7 +590,7 @@ public:
         abort();
       }
 
-      bool foundError = type.findIf([&](Type type) -> bool {
+      bool foundError = type->getCanonicalType().findIf([&](Type type) -> bool {
         if (auto archetype = type->getAs<ArchetypeType>()) {
           // Only visit each archetype once.
           if (!visitedArchetypes.insert(archetype).second)
@@ -806,22 +836,22 @@ public:
       if (D->hasInterfaceType())
         verifyChecked(D->getInterfaceType());
 
-      if (D->hasAccessibility()) {
+      if (D->hasAccess()) {
         PrettyStackTraceDecl debugStack("verifying access", D);
         if (D->getFormalAccessScope().isPublic() &&
-            D->getFormalAccess() < Accessibility::Public) {
+            D->getFormalAccess() < AccessLevel::Public) {
           Out << "non-public decl has no formal access scope\n";
           D->dump(Out);
           abort();
         }
-        if (D->getEffectiveAccess() == Accessibility::Private) {
+        if (D->getEffectiveAccess() == AccessLevel::Private) {
           Out << "effective access should use 'fileprivate' for 'private'\n";
           D->dump(Out);
           abort();
         }
       }
 
-      if (auto Overridden = D->getOverriddenDecl()) {
+      if (auto Overridden = getOverriddenDeclIfAvailable(D)) {
         if (D->getDeclContext() == Overridden->getDeclContext()) {
           PrettyStackTraceDecl debugStack("verifying overridden", D);
           Out << "cannot override a decl in the same DeclContext";
@@ -902,6 +932,9 @@ public:
       verifyCheckedBase(S);
     }
     void verifyChecked(DeferStmt *S) {
+      auto FT = S->getTempDecl()->getInterfaceType()->castTo<AnyFunctionType>();
+      assert(FT->isNoEscape() && "Defer statements must not escape");
+      (void)FT;
       verifyCheckedBase(S);
     }
 
@@ -1028,9 +1061,14 @@ public:
       for_each(exprTy->getElements().begin(), exprTy->getElements().end(),
                E->getElements().begin(),
                [this](const TupleTypeElt &field, const Expr *elt) {
-        checkTrivialSubtype(field.getType()->getUnlabeledType(Ctx),
-                            elt->getType()->getUnlabeledType(Ctx),
-                            "tuple and element");
+        if (!field.getType()->isEqual(elt->getType())) {
+          Out << "tuple_expr element type mismatch:\n";
+          Out << "  field: ";
+          Out << field.getType() << "\n";
+          Out << "  element: ";
+          Out << elt->getType() << "\n";
+          abort();
+        }
       });
       // FIXME: Check all the variadic elements.
       verifyCheckedBase(E);
@@ -1214,7 +1252,7 @@ public:
       }
 
       auto layout = srcTy->getExistentialLayout();
-      if (layout.superclass ||
+      if (layout.explicitSuperclass ||
           !layout.isObjC() ||
           layout.getProtocols().size() != 1) {
         Out << "ProtocolMetatypeToObject with non-ObjC-protocol metatype:\n";
@@ -1250,8 +1288,8 @@ public:
       PrettyStackTraceExpr debugStack(Ctx,
                                       "verifying InOutToPointer", E);
 
-      if (!WhitelistedInOutToPointerExpr.count(E)) {
-        Out << "Unwhitelisted InOutToPointerExpr?!\n";
+      if (!ValidInOutToPointerExprs.count(E)) {
+        Out << "InOutToPointerExpr in unexpected position!\n";
         E->print(Out);
         Out << "\n";
         abort();
@@ -1283,7 +1321,7 @@ public:
       PrettyStackTraceExpr debugStack(Ctx,
                                       "verifying ArrayToPointer", E);
 
-      if (!WhitelistedArrayToPointerExpr.count(E)) {
+      if (!ValidArrayToPointerExprs.count(E)) {
         Out << "ArrayToPointer in invalid position?!\n";
         E->print(Out);
         Out << "\n";
@@ -1423,7 +1461,7 @@ public:
       verifyCheckedBase(E);
     }
 
-    void updateExprToPointerWhitelist(Expr *Base, Expr *Arg) {
+    void maybeRecordValidPointerConversion(Expr *Base, Expr *Arg) {
       auto handleSubExpr = [&](Expr *origSubExpr) {
         auto subExpr = origSubExpr;
         unsigned optionalDepth = 0;
@@ -1441,7 +1479,9 @@ public:
           }
         };
 
-        // These outer entities will be interleaved in multi-level optionals.
+        // FIXME: This doesn't seem like a particularly robust
+        //        approach to tracking whether pointer conversions
+        //        always appear as call arguments.
         while (true) {
           // Look through optional evaluations.
           if (auto *optionalEval = dyn_cast<OptionalEvaluationExpr>(subExpr)) {
@@ -1456,19 +1496,30 @@ public:
             continue;
           }
 
+          // FIXME: This is only handling the value conversion, not
+          //        the key conversion. What this verifier check
+          //        should probably do is just track whether we're
+          //        currently visiting arguments of an apply when we
+          //        find these conversions.
+          if (auto *upcast =
+                  dyn_cast<CollectionUpcastConversionExpr>(subExpr)) {
+            subExpr = upcast->getValueConversion().Conversion;
+            continue;
+          }
+
           break;
         }
 
-        // Whitelist inout-to-pointer conversions.
+        // Record inout-to-pointer conversions.
         if (auto *inOutToPtr = dyn_cast<InOutToPointerExpr>(subExpr)) {
-          WhitelistedInOutToPointerExpr.insert(inOutToPtr);
+          ValidInOutToPointerExprs.insert(inOutToPtr);
           checkIsBindOptional(inOutToPtr->getSubExpr());
           return;
         }
 
-        // Whitelist array-to-pointer conversions.
+        // Record array-to-pointer conversions.
         if (auto *arrayToPtr = dyn_cast<ArrayToPointerExpr>(subExpr)) {
-          WhitelistedArrayToPointerExpr.insert(arrayToPtr);
+          ValidArrayToPointerExprs.insert(arrayToPtr);
           checkIsBindOptional(arrayToPtr->getSubExpr());
           return;
         }
@@ -1539,7 +1590,7 @@ public:
                  "\nArgument type: ";
           E->getArg()->getType().print(Out);
           Out << "\nParameter type: ";
-          FT->getInput()->print(Out);
+          FT->printParams(Out);
           Out << "\n";
           E->dump(Out);
           abort();
@@ -1575,7 +1626,7 @@ public:
       }
       
       // The base of a member reference cannot be an existential type.
-      if (E->getBase()->getType()->getLValueOrInOutObjectType()
+      if (E->getBase()->getType()->getWithoutSpecifierType()
             ->isAnyExistentialType()) {
         Out << "Member reference into an unopened existential type\n";
         E->dump(Out);
@@ -1587,7 +1638,7 @@ public:
       if (auto *baseIOT = E->getBase()->getType()->getAs<InOutType>()) {
         if (!baseIOT->getObjectType()->is<ArchetypeType>()) {
           auto *VD = dyn_cast<VarDecl>(E->getMember().getDecl());
-          if (!VD || !VD->hasAccessorFunctions()) {
+          if (!VD || VD->getAllAccessors().empty()) {
             Out << "member_ref_expr on value of inout type\n";
             E->dump(Out);
             abort();
@@ -1605,7 +1656,7 @@ public:
 
       // The base of a dynamic member reference cannot be an
       // existential type.
-      if (E->getBase()->getType()->getLValueOrInOutObjectType()
+      if (E->getBase()->getType()->getWithoutSpecifierType()
             ->isAnyExistentialType()) {
         Out << "Member reference into an unopened existential type\n";
         E->dump(Out);
@@ -1624,7 +1675,7 @@ public:
       }
 
       // The base of a subscript cannot be an existential type.
-      if (E->getBase()->getType()->getLValueOrInOutObjectType()
+      if (E->getBase()->getType()->getWithoutSpecifierType()
             ->isAnyExistentialType()) {
         Out << "Member reference into an unopened existential type\n";
         E->dump(Out);
@@ -1640,7 +1691,7 @@ public:
       PrettyStackTraceExpr debugStack(Ctx, "verifying DynamicSubscriptExpr", E);
 
       // The base of a subscript cannot be an existential type.
-      if (E->getBase()->getType()->getLValueOrInOutObjectType()
+      if (E->getBase()->getType()->getWithoutSpecifierType()
             ->isAnyExistentialType()) {
         Out << "Member reference into an unopened existential type\n";
         E->dump(Out);
@@ -1657,10 +1708,10 @@ public:
                                  Expr *E) {
       auto optionalRVType = optionalType->getRValueType();
       auto objectRVType = objectType->getRValueType();
-      
-      checkSameType(objectRVType, optionalRVType->getAnyOptionalObjectType(),
+
+      checkSameType(objectRVType, optionalRVType->getOptionalObjectType(),
                     "optional object type");
-      
+
       if (objectType->is<LValueType>() != optionalType->is<LValueType>()) {
         Out << "optional operation must preserve lvalue-ness of base\n";
         E->print(Out);
@@ -1669,7 +1720,7 @@ public:
     }
 
     void verifyChecked(OptionalEvaluationExpr *E) {
-      if (E->getType()->isLValueType()) {
+      if (E->getType()->hasLValueType()) {
         Out << "Optional evaluation should not produce an lvalue";
         E->print(Out);
         abort();
@@ -1719,7 +1770,6 @@ public:
         Out << "Unexpected types in IdentityExpr\n";
         abort();
       }
-      checkSameLValueAccessKind(E, E->getSubExpr(), "IdentityExpr");
 
       verifyCheckedBase(E);
     }
@@ -1766,11 +1816,12 @@ public:
 
       /// Retrieve the ith element type from the resulting tuple type.
       auto getOuterElementType = [&](unsigned i) -> Type {
-        if (!TT) {
+        if (E->isResultScalar()) {
+          assert(i == 0);
           return E->getType()->getWithoutParens();
+        } else {
+          return TT->getElementType(i);
         }
-
-        return TT->getElementType(i);
       };
 
       Type varargsType;
@@ -1826,7 +1877,7 @@ public:
       PrettyStackTraceExpr debugStack(Ctx, "verifying InjectIntoOptionalExpr",
                                       E);
 
-      auto valueType = E->getType()->getAnyOptionalObjectType();
+      auto valueType = E->getType()->getOptionalObjectType();
       if (!valueType) {
         Out << "InjectIntoOptionalExpr is not of Optional type";
         abort();
@@ -1950,6 +2001,121 @@ public:
         abort();
       }
     }
+  
+    void verifyChecked(KeyPathApplicationExpr *E) {
+      PrettyStackTraceExpr debugStack(
+        Ctx, "verifying KeyPathApplicationExpr", E);
+      
+      auto baseTy = E->getBase()->getType();
+      auto keyPathTy = E->getKeyPath()->getType();
+      auto resultTy = E->getType();
+      
+      if (auto nom = keyPathTy->getAs<NominalType>()) {
+        if (nom->getDecl() == Ctx.getAnyKeyPathDecl()) {
+          // AnyKeyPath application is <T> rvalue T -> rvalue Any?
+          if (baseTy->is<LValueType>()) {
+            Out << "AnyKeyPath application base is not an rvalue\n";
+            abort();
+          }
+          auto resultObjTy = resultTy->getOptionalObjectType();
+          if (!resultObjTy || !resultObjTy->isAny()) {
+            Out << "AnyKeyPath application result must be Any?\n";
+            abort();
+          }
+          return;
+        }
+      } else if (auto bgt = keyPathTy->getAs<BoundGenericType>()) {
+        if (bgt->getDecl() == Ctx.getPartialKeyPathDecl()) {
+          // PartialKeyPath<T> application is rvalue T -> rvalue Any
+          if (!baseTy->isEqual(bgt->getGenericArgs()[0])) {
+            Out << "PartialKeyPath application base doesn't match type\n";
+            abort();
+          }
+          if (!resultTy->isAny()) {
+            Out << "PartialKeyPath application result must be Any?\n";
+            abort();
+          }
+          return;
+        } else if (bgt->getDecl() == Ctx.getKeyPathDecl()) {
+          // KeyPath<T, U> application is rvalue T -> rvalue U
+          if (!baseTy->isEqual(bgt->getGenericArgs()[0])) {
+            Out << "KeyPath application base doesn't match type\n";
+            abort();
+          }
+          if (!resultTy->isEqual(bgt->getGenericArgs()[1])) {
+            Out << "KeyPath application result doesn't match type\n";
+            abort();
+          }
+          return;
+        } else if (bgt->getDecl() == Ctx.getWritableKeyPathDecl()) {
+          // WritableKeyPath<T, U> application is
+          //    lvalue T -> lvalue U
+          // or rvalue T -> rvalue U
+          if (baseTy->is<LValueType>()) {
+            if (!resultTy->is<LValueType>()) {
+              Out << "WritableKeyPath base and result don't match lvalue-ness\n";
+              abort();
+            }
+            baseTy = baseTy->getRValueType();
+            resultTy = resultTy->getRValueType();
+          }
+          
+          if (!baseTy->isEqual(bgt->getGenericArgs()[0])) {
+            Out << "WritableKeyPath application base doesn't match type\n";
+            abort();
+          }
+          if (!resultTy->isEqual(bgt->getGenericArgs()[1])) {
+            Out << "WritableKeyPath application result doesn't match type\n";
+            abort();
+          }
+          return;
+        } else if (bgt->getDecl() == Ctx.getReferenceWritableKeyPathDecl()) {
+          // ReferenceWritableKeyPath<T, U> application is
+          //    rvalue T -> lvalue U
+          // or lvalue T -> lvalue U
+          // or rvalue T -> rvalue U
+          if (baseTy->is<LValueType>()) {
+            if (!resultTy->is<LValueType>()) {
+              Out << "ReferenceWritableKeyPath base and result don't "
+                     "match lvalue-ness\n";
+              abort();
+            }
+            baseTy = baseTy->getRValueType();
+            resultTy = resultTy->getRValueType();
+          } else {
+            resultTy = resultTy->getRValueType();
+          }
+
+          if (!baseTy->isEqual(bgt->getGenericArgs()[0])) {
+            Out << "ReferenceWritableKeyPath application base doesn't "
+                   "match type\n";
+            abort();
+          }
+          if (!resultTy->isEqual(bgt->getGenericArgs()[1])) {
+            Out << "ReferenceWritableKeyPath application result doesn't "
+                   "match type\n";
+            abort();
+          }
+          return;
+        }
+      }
+      
+      Out << "invalid key path type\n";
+      abort();
+    }
+
+    void verifyChecked(LoadExpr *E) {
+      PrettyStackTraceExpr debugStack(Ctx, "verifying LoadExpr", E);
+
+      auto *subExpr = E->getSubExpr();
+      if (isa<ParenExpr>(subExpr) || isa<ForceValueExpr>(subExpr)) {
+        Out << "Immediate ParenExpr/ForceValueExpr should preceed a LoadExpr\n";
+        E->dump(Out);
+        abort();
+      }
+
+      verifyCheckedBase(E);
+    }
 
     static bool hasEnclosingFunctionContext(DeclContext *dc) {
       switch (dc->getContextKind()) {
@@ -1974,16 +2140,32 @@ public:
     }
 
     void verifyChecked(ValueDecl *VD) {
-      if (!VD->hasAccessibility() && !VD->getDeclContext()->isLocalContext() &&
-          !isa<GenericTypeParamDecl>(VD) && !isa<ParamDecl>(VD)) {
-        dumpRef(VD);
-        Out << " does not have accessibility";
-        abort();
+      if (VD->hasAccess()) {
+        if (VD->getFormalAccess() == AccessLevel::Open) {
+          if (!isa<ClassDecl>(VD) && !VD->isPotentiallyOverridable()) {
+            Out << "decl cannot be 'open'\n";
+            VD->dump(Out);
+            abort();
+          }
+          if (VD->isFinal()) {
+            Out << "decl cannot be both 'open' and 'final'\n";
+            VD->dump(Out);
+            abort();
+          }
+        }
+      } else {
+        if (!VD->getDeclContext()->isLocalContext() &&
+            !isa<GenericTypeParamDecl>(VD) && !isa<ParamDecl>(VD)) {
+          dumpRef(VD);
+          Out << " does not have access";
+          abort();
+        }
       }
 
       // Make sure that there are no archetypes in the interface type.
       if (VD->getDeclContext()->isTypeContext() &&
           !hasEnclosingFunctionContext(VD->getDeclContext()) &&
+          VD->getInterfaceType()->hasArchetype() &&
           VD->getInterfaceType().findIf([](Type type) {
             return type->is<ArchetypeType>();
           })) {
@@ -1993,6 +2175,13 @@ public:
       }
 
       verifyCheckedBase(VD);
+    }
+
+    bool shouldWalkIntoLazyInitializers() override {
+      // We don't want to walk into lazy initializers because they should
+      // have been reparented to their synthesized getter, which will
+      // invalidate various invariants.
+      return false;
     }
 
     void verifyChecked(PatternBindingDecl *binding) {
@@ -2006,43 +2195,65 @@ public:
     }
 
     void verifyChecked(AbstractStorageDecl *ASD) {
-      if (ASD->hasAccessibility() && ASD->isSettable(nullptr)) {
-        auto setterAccess = ASD->getSetterAccessibility();
+      if (ASD->hasAccess() && ASD->isSettable(nullptr)) {
+        auto setterAccess = ASD->getSetterFormalAccess();
         if (ASD->getSetter() &&
             ASD->getSetter()->getFormalAccess() != setterAccess) {
-          Out << "AbstractStorageDecl's setter accessibility is out of sync"
-                 " with the accessibility actually on the setter";
+          Out << "AbstractStorageDecl's setter access is out of sync"
+                 " with the access actually on the setter\n";
           abort();
         }
       }
 
-      // Make sure we consistently set accessor overrides.
-      if (auto *baseASD = ASD->getOverriddenDecl()) {
-        if (ASD->getGetter() && baseASD->getGetter())
-          assert(ASD->getGetter()->getOverriddenDecl() ==
-                 baseASD->getGetter() &&
-                 "Storage overrides but getter does not");
-        if (ASD->getSetter() && baseASD->getSetter() &&
-            baseASD->isSetterAccessibleFrom(ASD->getDeclContext()))
-          assert(ASD->getSetter()->getOverriddenDecl() ==
-                 baseASD->getSetter() &&
-                 "Storage overrides but setter does not");
-        if (ASD->getMaterializeForSetFunc() &&
-            baseASD->getMaterializeForSetFunc() &&
-            baseASD->isSetterAccessibleFrom(ASD->getDeclContext()))
-          assert(ASD->getMaterializeForSetFunc()->getOverriddenDecl() ==
-                 baseASD->getMaterializeForSetFunc() &&
-                 "Storage override but materializeForSet does not");
-      } else {
-        if (ASD->getGetter())
-          assert(!ASD->getGetter()->getOverriddenDecl() &&
-                 "Storage does not override but getter does");
-        if (ASD->getSetter())
-          assert(!ASD->getSetter()->getOverriddenDecl() &&
-                 "Storage does not override but setter does");
-        if (ASD->getMaterializeForSetFunc())
-          assert(!ASD->getMaterializeForSetFunc()->getOverriddenDecl() &&
-                 "Storage does not override but materializeForSet does");
+      if (auto getter = ASD->getGetter()) {
+        if (getter->isMutating() != ASD->isGetterMutating()) {
+          Out << "AbstractStorageDecl::isGetterMutating is out of sync"
+                 " with whether the getter is actually mutating\n";
+          abort();
+        }
+      }
+      if (auto setter = ASD->getSetter()) {
+        if (setter->isMutating() != ASD->isSetterMutating()) {
+          Out << "AbstractStorageDecl::isSetterMutating is out of sync"
+                 " with whether the setter is actually mutating\n";
+          abort();
+        }
+      }
+      if (auto materializeForSet = ASD->getMaterializeForSetFunc()) {
+        if (materializeForSet->isMutating() !=
+            (ASD->isSetterMutating() || ASD->isGetterMutating())) {
+          Out << "AbstractStorageDecl::is{Getter,Setter}Mutating is out of sync"
+                 " with whether materializeForSet is mutating\n";
+          abort();
+        }
+      }
+      if (auto addressor = ASD->getAddressor()) {
+        if (addressor->isMutating() != ASD->isGetterMutating()) {
+          Out << "AbstractStorageDecl::isGetterMutating is out of sync"
+                 " with whether immutable addressor is mutating";
+          abort();
+        }
+      }
+      if (auto reader = ASD->getReadCoroutine()) {
+        if (reader->isMutating() != ASD->isGetterMutating()) {
+          Out << "AbstractStorageDecl::isGetterMutating is out of sync"
+                 " with whether read accessor is mutating";
+          abort();
+        }
+      }
+      if (auto addressor = ASD->getMutableAddressor()) {
+        if (addressor->isMutating() != ASD->isSetterMutating()) {
+          Out << "AbstractStorageDecl::isSetterMutating is out of sync"
+                 " with whether mutable addressor is mutating";
+          abort();
+        }
+      }
+      if (auto modifier = ASD->getModifyCoroutine()) {
+        if (modifier->isMutating() != ASD->isSetterMutating()) {
+          Out << "AbstractStorageDecl::isSetterMutating is out of sync"
+                 " with whether modify addressor is mutating";
+          abort();
+        }
       }
 
       verifyCheckedBase(ASD);
@@ -2055,13 +2266,13 @@ public:
       // in which case they must either have l-value type or be anonymous.
       if (!var->getInterfaceType()->isMaterializable()) {
         if (!isa<ParamDecl>(var)) {
-          Out << "Non-parameter VarDecl has non-materializable type: ";
+          Out << "VarDecl has non-materializable type: ";
           var->getType().print(Out);
           Out << "\n";
           abort();
         }
 
-        if (!var->getInterfaceType()->is<InOutType>() && var->hasName()) {
+        if (!var->isInOut() && var->hasName()) {
           Out << "ParamDecl may only have non-materializable tuple type "
                  "when it is anonymous: ";
           var->getType().print(Out);
@@ -2072,9 +2283,9 @@ public:
 
       // The fact that this is *directly* be a reference storage type
       // cuts the code down quite a bit in getTypeOfReference.
-      if (var->getAttrs().hasAttribute<OwnershipAttr>() !=
+      if (var->getAttrs().hasAttribute<ReferenceOwnershipAttr>() !=
           isa<ReferenceStorageType>(var->getInterfaceType().getPointer())) {
-        if (var->getAttrs().hasAttribute<OwnershipAttr>()) {
+        if (var->getAttrs().hasAttribute<ReferenceOwnershipAttr>()) {
           Out << "VarDecl has an ownership attribute, but its type"
                  " is not a ReferenceStorageType: ";
         } else {
@@ -2091,7 +2302,7 @@ public:
         typeForAccessors =
             var->getDeclContext()->mapTypeIntoContext(typeForAccessors);
         if (const FuncDecl *getter = var->getGetter()) {
-          if (getter->getParameterLists().back()->size() != 0) {
+          if (getter->getParameters()->size() != 0) {
             Out << "property getter has parameters\n";
             abort();
           }
@@ -2114,26 +2325,38 @@ public:
           Out << "property setter has non-Void result type\n";
           abort();
         }
-        if (setter->getParameterLists().back()->size() == 0) {
+        if (setter->getParameters()->size() == 0) {
           Out << "property setter has no parameters\n";
           abort();
         }
-        if (setter->getParameterLists().back()->size() != 1) {
+        if (setter->getParameters()->size() != 1) {
           Out << "property setter has 2+ parameters\n";
           abort();
         }
-        const ParamDecl *param = setter->getParameterLists().back()->get(0);
+        const ParamDecl *param = setter->getParameters()->get(0);
         Type paramType = param->getInterfaceType();
         if (!var->getDeclContext()->contextHasLazyGenericEnvironment()) {
           paramType = var->getDeclContext()->mapTypeIntoContext(paramType);
           if (!paramType->isEqual(typeForAccessors)) {
-            Out << "property and setter param have mismatched types: '";
-            typeForAccessors.print(Out);
-            Out << "' vs. '";
-            paramType.print(Out);
-            Out << "'\n";
+            Out << "property and setter param have mismatched types:\n";
+            typeForAccessors.dump(Out, 2);
+            Out << "vs.\n";
+            paramType.dump(Out, 2);
             abort();
           }
+        }
+      }
+
+      if (var->getAttrs().hasAttribute<ImplicitlyUnwrappedOptionalAttr>()) {
+        auto varTy = var->getInterfaceType()
+                         ->getReferenceStorageReferent();
+
+        // FIXME: Update to look for plain Optional once
+        // ImplicitlyUnwrappedOptional is removed
+        if (!varTy->getOptionalObjectType()) {
+          Out << "implicitly unwrapped optional attribute should only be set on VarDecl "
+                 "with optional type\n";
+          abort();
         }
       }
 
@@ -2201,6 +2424,10 @@ public:
       }
     }
 
+    void verifyChecked(SubstitutionMap substitutions){
+      // FIXME: Check replacement types without forcing anything.
+    }
+
     /// Check the given explicit protocol conformance.
     void verifyConformance(Decl *decl, ProtocolConformance *conformance) {
       PrettyStackTraceDecl debugStack("verifying protocol conformance", decl);
@@ -2234,7 +2461,7 @@ public:
 
       // If the conformance is lazily resolved, don't check it; that can cause
       // massive deserialization at a point where the compiler cannot handle it.
-      if (normal->isLazilyResolved()) return;
+      if (normal->isLazilyLoaded()) return;
 
       // Translate the owning declaration into a DeclContext.
       auto *nominal = dyn_cast<NominalTypeDecl>(decl);
@@ -2284,9 +2511,8 @@ public:
           continue;
         
         // If this is an accessor for something, ignore it.
-        if (auto *FD = dyn_cast<FuncDecl>(member))
-          if (FD->isAccessor())
-            continue;
+        if (isa<AccessorDecl>(member))
+          continue;
 
 
         if (auto req = dyn_cast<ValueDecl>(member)) {
@@ -2308,13 +2534,15 @@ public:
           // Check the witness substitutions.
           const auto &witness = normal->getWitness(req, nullptr);
 
-          if (witness.requiresSubstitution()) {
-            GenericEnv.push_back({witness.getSyntheticEnvironment()});
-            for (const auto &sub : witness.getSubstitutions()) {
-              verifyChecked(sub.getReplacement());
-            }
+          if (auto *genericEnv = witness.getSyntheticEnvironment())
+            GenericEnv.push_back({genericEnv});
+
+          verifyChecked(witness.getRequirementToSyntheticSubs());
+          verifyChecked(witness.getSubstitutions());
+
+          if (auto *genericEnv = witness.getSyntheticEnvironment()) {
             assert(GenericEnv.back().storage.dyn_cast<GenericEnvironment *>()
-                     == witness.getSyntheticEnvironment());
+                     == genericEnv);
             GenericEnv.pop_back();
           }
 
@@ -2326,7 +2554,7 @@ public:
       if (!normal->isInvalid()){
         auto conformances = normal->getSignatureConformances();
         unsigned idx = 0;
-        for (auto req : proto->getRequirementSignature()->getRequirements()) {
+        for (const auto &req : proto->getRequirementSignature()) {
           if (req.getKind() != RequirementKind::Conformance)
             continue;
 
@@ -2428,9 +2656,7 @@ public:
       if (!isa<DestructorDecl>(AFD)) { // Destructor has no non-self params.
         auto paramNames = AFD->getFullName().getArgumentNames();
         bool checkParamNames = (bool)AFD->getFullName();
-        bool hasSelf =
-          isa<ConstructorDecl>(AFD) || AFD->getDeclContext()->isTypeContext();
-        auto *firstParams = AFD->getParameterList(hasSelf ? 1 : 0);
+        auto *firstParams = AFD->getParameters();
 
         if (checkParamNames &&
             paramNames.size() != firstParams->size()) {
@@ -2495,14 +2721,13 @@ public:
 
       // Verify that the optionality of the result type of the
       // initializer matches the failability of the initializer.
-      if (!CD->isInvalid() && 
-          CD->getDeclContext()->getDeclaredInterfaceType()->getAnyNominal() 
-            != Ctx.getOptionalDecl() &&
-          CD->getDeclContext()->getDeclaredInterfaceType()->getAnyNominal() 
-            != Ctx.getImplicitlyUnwrappedOptionalDecl()) {
-        OptionalTypeKind resultOptionality = OTK_None;
-        CD->getResultInterfaceType()->getAnyOptionalObjectType(resultOptionality);
-        if (resultOptionality != CD->getFailability()) {
+      if (!CD->isInvalid() &&
+          CD->getDeclContext()->getDeclaredInterfaceType()->getAnyNominal() !=
+              Ctx.getOptionalDecl()) {
+        bool resultIsOptional = (bool) CD->getResultInterfaceType()->getOptionalObjectType();
+        auto declIsOptional = CD->getFailability() != OTK_None;
+
+        if (resultIsOptional != declIsOptional) {
           Out << "Initializer has result optionality/failability mismatch\n";
           CD->dump(llvm::errs());
           abort();
@@ -2511,14 +2736,49 @@ public:
         // Also check the interface type.
         if (auto genericFn 
               = CD->getInterfaceType()->getAs<GenericFunctionType>()) {
-          resultOptionality = OTK_None;
-          genericFn->getResult()->castTo<AnyFunctionType>()->getResult()
-            ->getAnyOptionalObjectType(resultOptionality);
-          if (resultOptionality != CD->getFailability()) {
+          resultIsOptional = (bool) genericFn->getResult()
+              ->castTo<AnyFunctionType>()
+              ->getResult()
+              ->getOptionalObjectType();
+          if (resultIsOptional != declIsOptional) {
             Out << "Initializer has result optionality/failability mismatch\n";
             CD->dump(llvm::errs());
             abort();
           }
+        }
+      }
+
+      if (CD->getAttrs().hasAttribute<ImplicitlyUnwrappedOptionalAttr>()) {
+        if (!CD->getInterfaceType() ||
+            !CD->getInterfaceType()->is<AnyFunctionType>()) {
+          Out << "Expected ConstructorDecl to have a function type!\n";
+          CD->dump(llvm::errs());
+          abort();
+        }
+
+        if (CD->getFailability() != OTK_ImplicitlyUnwrappedOptional) {
+          Out << "Expected IUO failability for constructor with IUO decl "
+                 "attribute!\n";
+          CD->dump(llvm::errs());
+          abort();
+        }
+
+        auto resultTy = CD->getResultInterfaceType();
+
+        // FIXME: Update to look for plain Optional once
+        // ImplicitlyUnwrappedOptional is removed
+        if (!resultTy->getOptionalObjectType()) {
+          Out << "implicitly unwrapped optional attribute should only be set "
+                 "on constructors with optional return types\n";
+          CD->dump(llvm::errs());
+          abort();
+        }
+      } else {
+        if (CD->getFailability() == OTK_ImplicitlyUnwrappedOptional) {
+          Out << "Expected IUO decl attribute for constructor with IUO "
+                 "failability!\n";
+          CD->dump(llvm::errs());
+          abort();
         }
       }
 
@@ -2575,21 +2835,22 @@ public:
       // dependent member types.
       // FIXME: This is a general property of the type system.
       auto interfaceTy = AFD->getInterfaceType();
-      Type unresolvedDependentTy;
-      interfaceTy.findIf([&](Type type) -> bool {
-        if (auto dependent = type->getAs<DependentMemberType>()) {
-          if (dependent->getAssocType() == nullptr) {
-            unresolvedDependentTy = dependent;
-            return true;
-          }
-        }
-        return false;
-      });
-
-      if (unresolvedDependentTy) {
+      if (auto unresolvedDependentTy
+            = interfaceTy->findUnresolvedDependentMemberType()) {
         Out << "Unresolved dependent member type ";
         unresolvedDependentTy->print(Out);
         abort();
+      }
+
+      // Check that type members have an interface type of the form
+      // (Self) -> (Args...) -> Result.
+      if (AFD->hasImplicitSelfDecl()) {
+        if (!interfaceTy->castTo<AnyFunctionType>()
+              ->getResult()->is<FunctionType>()) {
+          Out << "Interface type of method must return a function";
+          interfaceTy->dump(Out);
+          abort();
+        }
       }
 
       // Throwing @objc methods must have a foreign error convention.
@@ -2619,8 +2880,8 @@ public:
       // If a decl has the Throws bit set, the function type should throw,
       // and vice versa.
       auto fnTy = AFD->getInterfaceType()->castTo<AnyFunctionType>();
-      for (unsigned i = 1, e = AFD->getNumParameterLists(); i != e; ++i)
-        fnTy = fnTy->getResult()->castTo<AnyFunctionType>();
+      if (AFD->hasImplicitSelfDecl())
+        fnTy = fnTy->getResult()->castTo<FunctionType>();
 
       if (AFD->hasThrows() != fnTy->getExtInfo().throws()) {
         Out << "function 'throws' flag does not match function type\n";
@@ -2652,52 +2913,96 @@ public:
     void verifyChecked(FuncDecl *FD) {
       PrettyStackTraceDecl debugStack("verifying FuncDecl", FD);
 
-      if (FD->isAccessor()) {
-        auto *storageDecl = FD->getAccessorStorageDecl();
-        if (!storageDecl) {
-          Out << "Missing storage decl\n";
+      if (FD->isMutating()) {
+        if (!FD->isInstanceMember()) {
+          Out << "mutating function is not an instance member\n";
+          abort();
+        }
+        if (FD->getDeclContext()->getAsClassOrClassExtensionContext()) {
+          Out << "mutating function in a class\n";
+          abort();
+        }
+        const ParamDecl *selfParam = FD->getImplicitSelfDecl();
+        if (!selfParam->isInOut()) {
+          Out << "mutating function does not have inout 'self'\n";
+          abort();
+        }
+      } else {
+        const ParamDecl *selfParam = FD->getImplicitSelfDecl();
+        if (selfParam && selfParam->isInOut()) {
+          Out << "non-mutating function has inout 'self'\n";
+          abort();
+        }
+      }
+
+      if (FD->getAttrs().hasAttribute<ImplicitlyUnwrappedOptionalAttr>()) {
+        if (!FD->getInterfaceType() ||
+            !FD->getInterfaceType()->is<AnyFunctionType>()) {
+          Out << "Expected FuncDecl to have a function type!\n";
           abort();
         }
 
-        if (FD->isGetterOrSetter()) {
-          if (FD->isFinal() != storageDecl->isFinal()) {
-            Out << "Property and accessor do not match for 'final'\n";
-            abort();
-          }
-          if (FD->isDynamic() != storageDecl->isDynamic()) {
-            Out << "Property and accessor do not match for 'dynamic'\n";
-            abort();
-          }
-        }
+        auto resultTy = FD->getResultInterfaceType();
 
-        auto storedAccessor =
-          storageDecl->getAccessorFunction(FD->getAccessorKind());
-        if (storedAccessor != FD) {
-          Out << "storage declaration has different accessor for this kind\n";
+        // FIXME: Update to look for plain Optional once
+        // ImplicitlyUnwrappedOptional is removed
+        if (!resultTy->getOptionalObjectType()) {
+          Out << "implicitly unwrapped optional attribute should only be set "
+                 "on functions with optional return types\n";
           abort();
         }
+      }
 
-        switch (FD->getAccessorKind()) {
-        case AccessorKind::NotAccessor: llvm_unreachable("bad kind");
-        case AccessorKind::IsGetter:
-        case AccessorKind::IsSetter:
-        case AccessorKind::IsWillSet:
-        case AccessorKind::IsDidSet:
-        case AccessorKind::IsMaterializeForSet:
-          if (FD->getAddressorKind() != AddressorKind::NotAddressor) {
-            Out << "non-addressor accessor has an addressor kind\n";
-            abort();
-          }
-          break;
+      verifyCheckedBase(FD);
+    }
 
-        case AccessorKind::IsAddressor:
-        case AccessorKind::IsMutableAddressor:
-          if (FD->getAddressorKind() == AddressorKind::NotAddressor) {
-            Out << "addressor does not have an addressor kind\n";
-            abort();
-          }
-          break;
+    void verifyChecked(AccessorDecl *FD) {
+      PrettyStackTraceDecl debugStack("verifying AccessorDecl", FD);
+
+      auto *storageDecl = FD->getStorage();
+      if (!storageDecl) {
+        Out << "Missing storage decl\n";
+        abort();
+      }
+
+      if (FD->isGetterOrSetter()) {
+        if (FD->isFinal() != storageDecl->isFinal()) {
+          Out << "Property and accessor do not match for 'final'\n";
+          abort();
         }
+        if (FD->isDynamic() != storageDecl->isDynamic()) {
+          Out << "Property and accessor do not match for 'dynamic'\n";
+          abort();
+        }
+      }
+
+      auto storedAccessor = storageDecl->getAccessor(FD->getAccessorKind());
+      if (storedAccessor != FD) {
+        Out << "storage declaration has different accessor for this kind\n";
+        abort();
+      }
+
+      switch (FD->getAccessorKind()) {
+      case AccessorKind::Get:
+      case AccessorKind::Set:
+      case AccessorKind::WillSet:
+      case AccessorKind::DidSet:
+      case AccessorKind::MaterializeForSet:
+      case AccessorKind::Read:
+      case AccessorKind::Modify:
+        if (FD->getAddressorKind() != AddressorKind::NotAddressor) {
+          Out << "non-addressor accessor has an addressor kind\n";
+          abort();
+        }
+        break;
+
+      case AccessorKind::Address:
+      case AccessorKind::MutableAddress:
+        if (FD->getAddressorKind() == AddressorKind::NotAddressor) {
+          Out << "addressor does not have an addressor kind\n";
+          abort();
+        }
+        break;
       }
 
       verifyCheckedBase(FD);
@@ -2706,29 +3011,16 @@ public:
     void verifyParsed(FuncDecl *FD) {
       PrettyStackTraceDecl debugStack("verifying FuncDecl", FD);
 
-      unsigned MinParamPatterns = FD->getImplicitSelfDecl() ? 2 : 1;
-      if (FD->getParameterLists().size() < MinParamPatterns) {
-        Out << "should have at least " << MinParamPatterns
-            << " parameter patterns\n";
+      verifyParsedBase(FD);
+    }
+
+    void verifyParsed(AccessorDecl *FD) {
+      PrettyStackTraceDecl debugStack("verifying AccessorDecl", FD);
+
+      auto storage = FD->getStorage();
+      if (storage->isStatic() != FD->isStatic()) {
+        Out << "accessor static-ness must match static-ness of storage\n";
         abort();
-      }
-
-      if (FD->isAccessor()) {
-        unsigned NumExpectedParamPatterns = 1;
-        if (FD->getImplicitSelfDecl())
-          NumExpectedParamPatterns++;
-        if (FD->getParameterLists().size() != NumExpectedParamPatterns) {
-          Out << "accessors should not be curried\n";
-          abort();
-        }
-      }
-
-      if (auto *VD = FD->getAccessorStorageDecl()) {
-        if (isa<VarDecl>(VD)
-            && cast<VarDecl>(VD)->isStatic() != FD->isStatic()) {
-          Out << "getter or setter static-ness must match static-ness of var\n";
-          abort();
-        }
       }
 
       verifyParsedBase(FD);
@@ -2841,15 +3133,6 @@ public:
       T.print(Out);
       Out << "\n";
       abort();
-    }
-
-    void checkSameLValueAccessKind(Expr *LHS, Expr *RHS, const char *what) {
-      if (LHS->hasLValueAccessKind() != RHS->hasLValueAccessKind() ||
-          (LHS->hasLValueAccessKind() &&
-           LHS->getLValueAccessKind() != RHS->getLValueAccessKind())) {
-        Out << what << " has a mismatched l-value access kind\n";
-        abort();
-      }
     }
 
     // Verification utilities.
@@ -3006,23 +3289,23 @@ public:
                         [&]{ S->print(Out); });
     }
 
-    void checkSourceRanges(IfConfigStmt *S) {
-      checkSourceRangesBase(S);
+    void checkSourceRanges(IfConfigDecl *ICD) {
+      checkSourceRangesBase(ICD);
 
-      SourceLoc Location = S->getStartLoc();
-      for (auto &Clause : S->getClauses()) {
+      SourceLoc Location = ICD->getStartLoc();
+      for (auto &Clause : ICD->getClauses()) {
         // Clause start, note that the first clause start location is the
         // same as that of the whole statement
-        if (Location == S->getStartLoc()) {
+        if (Location == ICD->getStartLoc()) {
           if (Location != Clause.Loc) {
-            Out << "bad start location of IfConfigStmt first clause\n";
-            S->print(Out);
+            Out << "bad start location of IfConfigDecl first clause\n";
+            ICD->print(Out);
             abort();
           }
         } else {
           if (!Ctx.SourceMgr.isBeforeInBuffer(Location, Clause.Loc)) {
-            Out << "bad start location of IfConfigStmt clause\n";
-            S->print(Out);
+            Out << "bad start location of IfConfigDecl clause\n";
+            ICD->print(Out);
             abort();
           }
         }
@@ -3032,8 +3315,8 @@ public:
         Expr *Cond = Clause.Cond;
         if (Cond) {
           if (!Ctx.SourceMgr.isBeforeInBuffer(Location, Cond->getStartLoc())) {
-            Out << "invalid IfConfigStmt clause condition start location\n";
-            S->print(Out);
+            Out << "invalid IfConfigDecl clause condition start location\n";
+            ICD->print(Out);
             abort();
           }
           Location = Cond->getEndLoc();
@@ -3048,8 +3331,8 @@ public:
           }
           
           if (!Ctx.SourceMgr.isBeforeInBuffer(StoredLoc, StartLocation)) {
-            Out << "invalid IfConfigStmt clause element start location\n";
-            S->print(Out);
+            Out << "invalid IfConfigDecl clause element start location\n";
+            ICD->print(Out);
             abort();
           }
           
@@ -3061,9 +3344,9 @@ public:
         }
       }
 
-      if (Ctx.SourceMgr.isBeforeInBuffer(S->getEndLoc(), Location)) {
-        Out << "invalid IfConfigStmt end location\n";
-        S->print(Out);
+      if (Ctx.SourceMgr.isBeforeInBuffer(ICD->getEndLoc(), Location)) {
+        Out << "invalid IfConfigDecl end location\n";
+        ICD->print(Out);
         abort();
       }
     }
@@ -3126,9 +3409,8 @@ public:
 
     /// \brief Verify that the given source ranges is contained within the
     /// parent's source range.
-    void checkSourceRanges(SourceRange Current,
-                           ASTWalker::ParentTy Parent,
-                           std::function<void()> printEntity) {
+    void checkSourceRanges(SourceRange Current, ASTWalker::ParentTy Parent,
+                           llvm::function_ref<void()> printEntity) {
       SourceRange Enclosing;
       if (Parent.isNull())
           return;
@@ -3208,13 +3490,6 @@ void swift::verify(SourceFile &SF) {
 
 bool swift::shouldVerify(const Decl *D, const ASTContext &Context) {
 #if !(defined(NDEBUG) || defined(SWIFT_DISABLE_AST_VERIFIER))
-  unsigned ProcessCount = Context.LangOpts.ASTVerifierProcessCount;
-  unsigned ProcessId = Context.LangOpts.ASTVerifierProcessId;
-  if (ProcessCount == 1) {
-    // No parallelism, verify all declarations.
-    return true;
-  }
-
   if (const auto *ED = dyn_cast<ExtensionDecl>(D)) {
     return shouldVerify(ED->getExtendedType()->getAnyNominal(), Context);
   }
@@ -3225,8 +3500,7 @@ bool swift::shouldVerify(const Decl *D, const ASTContext &Context) {
     return true;
   }
 
-  size_t Hash = llvm::hash_value(VD->getNameStr());
-  return Hash % ProcessCount == ProcessId;
+  return true;
 #else
   return false;
 #endif

@@ -105,10 +105,10 @@ static bool printObjCUSRForAccessor(const AbstractStorageDecl *ASD,
 
   ObjCSelector Selector;
   switch (Kind) {
-    case swift::AccessorKind::IsGetter:
+    case swift::AccessorKind::Get:
       Selector = ASD->getObjCGetterSelector();
       break;
-    case swift::AccessorKind::IsSetter:
+    case swift::AccessorKind::Set:
       Selector = ASD->getObjCSetterSelector();
       break;
     default:
@@ -152,7 +152,7 @@ static bool shouldUseObjCUSR(const Decl *D) {
   if (const auto *VD = dyn_cast<ValueDecl>(D)) {
     if (isa<EnumElementDecl>(VD))
       return true;
-    return objc_translation::isVisibleToObjC(VD, Accessibility::Internal);
+    return objc_translation::isVisibleToObjC(VD, AccessLevel::Internal);
   }
 
   if (const auto *ED = dyn_cast<ExtensionDecl>(D)) {
@@ -165,9 +165,7 @@ static bool shouldUseObjCUSR(const Decl *D) {
 }
 
 bool ide::printDeclUSR(const ValueDecl *D, raw_ostream &OS) {
-  if (!D->hasName() && !isa<ParamDecl>(D) &&
-      (!isa<FuncDecl>(D) ||
-       cast<FuncDecl>(D)->getAccessorKind() == AccessorKind::NotAccessor))
+  if (!D->hasName() && !isa<ParamDecl>(D) && !isa<AccessorDecl>(D))
     return true; // Ignore.
   if (D->getModuleContext()->isBuiltinModule())
     return true; // Ignore.
@@ -215,7 +213,8 @@ bool ide::printDeclUSR(const ValueDecl *D, raw_ostream &OS) {
     auto &Importer = *D->getASTContext().getClangModuleLoader();
 
     auto ClangMacroInfo = ClangN.getAsMacro();
-    bool Ignore = clang::index::generateUSRForMacro(D->getNameStr(),
+    bool Ignore = clang::index::generateUSRForMacro(
+        D->getBaseName().getIdentifier().str(),
         ClangMacroInfo->getDefinitionLoc(),
         Importer.getClangASTContext().getSourceManager(), Buf);
     if (!Ignore)

@@ -7,6 +7,7 @@ handle_gyb_sources(
 
 add_swift_unittest(SwiftBasicTests
   BlotMapVectorTest.cpp
+  CacheTest.cpp
   ClusteredBitVectorTest.cpp
   DemangleTest.cpp
   DiverseStackTest.cpp
@@ -14,6 +15,7 @@ add_swift_unittest(SwiftBasicTests
   EncodedSequenceTest.cpp
   FileSystemTest.cpp
   ImmutablePointerSetTest.cpp
+  JSONSerialization.cpp
   OptionSetTest.cpp
   OwnedStringTest.cpp
   PointerIntEnumTest.cpp
@@ -33,6 +35,7 @@ add_swift_unittest(SwiftBasicTests
 add_dependencies(SwiftBasicTests "${gyb_dependency_targets}")
 
 target_link_libraries(SwiftBasicTests
+  PRIVATE
   swiftBasic
   clangBasic
   )

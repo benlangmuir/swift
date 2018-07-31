@@ -45,15 +45,15 @@ static const char *skipParenExpression(const char *p, const char *End) {
       case ')':
         done = --ParenCount == 0;
         break;
-                  
+
       case '(':
         ++ParenCount;
         break;
-              
+
       case '"':
         e = skipStringInCode (e, End);
         break;
-              
+
       default:
         break;
       }
@@ -76,7 +76,7 @@ static const char *skipStringInCode(const char *p, const char *End) {
       case '"':
         done = true;
         break;
-                  
+
       case '\\':
         ++e;
         if (e >= End)
@@ -84,7 +84,7 @@ static const char *skipStringInCode(const char *p, const char *End) {
         else if (*e == '(')
           e = skipParenExpression (e, End);
         break;
-              
+
       default:
         break;
       }
@@ -113,8 +113,8 @@ ide::isSourceInputComplete(std::unique_ptr<llvm::MemoryBuffer> MemBuf) {
 
   SourceCompleteResult SCR;
   SCR.IsComplete = !P.isInputIncomplete();
-    
-  // Use the same code that was in the REPL code to track the indent level 
+
+  // Use the same code that was in the REPL code to track the indent level
   // for now. In the future we should get this from the Parser if possible.
 
   CharSourceRange entireRange = SM.getRangeForBuffer(BufferID);
@@ -167,7 +167,7 @@ ide::isSourceInputComplete(std::unique_ptr<llvm::MemoryBuffer> MemBuf) {
       if (!IndentInfos.empty())
         IndentInfos.pop_back();
       break;
-  
+
     default:
       if (LineSourceStart == nullptr && !isspace(*p))
         LineSourceStart = p;
@@ -375,7 +375,7 @@ static void walkOverriddenClangDecls(const clang::NamedDecl *D, const FnTy &Fn){
 
 void
 ide::walkOverriddenDecls(const ValueDecl *VD,
-                         std::function<void(llvm::PointerUnion<
+                         llvm::function_ref<void(llvm::PointerUnion<
                              const ValueDecl*, const clang::NamedDecl*>)> Fn) {
   for (auto CurrOver = VD; CurrOver; CurrOver = CurrOver->getOverriddenDecl()) {
     if (CurrOver != VD)
@@ -449,7 +449,7 @@ ide::replacePlaceholders(std::unique_ptr<llvm::MemoryBuffer> InputBuf,
     assert(Id.size() == Occur.FullPlaceholder.size());
 
     unsigned Offset = Occur.FullPlaceholder.data() - InputBuf->getBufferStart();
-    char *Ptr = (char*)NewBuf->getBufferStart() + Offset;
+    char *Ptr = const_cast<char *>(NewBuf->getBufferStart()) + Offset;
     std::copy(Id.begin(), Id.end(), Ptr);
 
     Occur.IdentifierReplacement = Id.str();
@@ -839,6 +839,11 @@ insertAfter(SourceManager &SM, SourceLoc Loc, StringRef Text,
   accept(SM, Lexer::getLocForEndOfToken(SM, Loc), Text, SubRegions);
 }
 
+void swift::ide::SourceEditConsumer::
+remove(SourceManager &SM, CharSourceRange Range) {
+  accept(SM, Range, "");
+}
+
 struct swift::ide::SourceEditJsonConsumer::Implementation {
   llvm::raw_ostream &OS;
   std::vector<SingleEdit> AllEdits;
@@ -903,9 +908,11 @@ public:
       getBufferIdentifierForLoc(Range.getStart())).getValue();
     if (BufferId == InterestedId) {
       HasChange = true;
-      RewriteBuf.ReplaceText(
-                             SM.getLocOffsetInBuffer(Range.getStart(), BufferId),
-                             Range.str().size(), Text);
+      auto StartLoc = SM.getLocOffsetInBuffer(Range.getStart(), BufferId);
+      if (!Range.getByteLength())
+          RewriteBuf.InsertText(StartLoc, Text);
+      else
+          RewriteBuf.ReplaceText(StartLoc, Range.str().size(), Text);
     }
   }
 
@@ -933,6 +940,10 @@ swift::ide::SourceEditOutputConsumer::~SourceEditOutputConsumer() { delete &Impl
 void swift::ide::SourceEditOutputConsumer::
 accept(SourceManager &SM, RegionType RegionType,
        ArrayRef<Replacement> Replacements) {
+  // ignore mismatched or
+  if (RegionType == RegionType::Unmatched || RegionType == RegionType::Mismatch)
+    return;
+
   for (const auto &Replacement : Replacements) {
     Impl.accept(SM, Replacement.Range, Replacement.Text);
   }

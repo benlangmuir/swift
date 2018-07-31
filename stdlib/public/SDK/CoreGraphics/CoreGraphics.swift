@@ -29,7 +29,7 @@ extension CGAffineTransform: Equatable {
 //===----------------------------------------------------------------------===//
 
 extension CGColor {
-  @available(OSX 10.3, iOS 2.0, *)
+  @available(macOS 10.3, iOS 2.0, *)
   public var components: [CGFloat]? {
     guard let pointer = self.__unsafeComponents else { return nil }
     let buffer = UnsafeBufferPointer(start: pointer, count: self.numberOfComponents)
@@ -53,7 +53,7 @@ public protocol _CGColorInitTrampoline {
 }
 
 extension _CGColorInitTrampoline {
-  public init(colorLiteralRed red: Float, green: Float, blue: Float,
+  public init(_colorLiteralRed red: Float, green: Float, blue: Float,
               alpha: Float) {
     self.init(red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue),
               alpha: CGFloat(alpha))
@@ -69,7 +69,8 @@ extension CGColor : _CGColorInitTrampoline, _ExpressibleByColorLiteral { }
 extension CGColorSpace {
   public var colorTable: [UInt8]? {
     guard self.model == .indexed else { return nil }
-    var table = [UInt8](repeating: 0, count: self.__colorTableCount)
+    let components = self.baseColorSpace?.numberOfComponents ?? 1
+    var table = [UInt8](repeating: 0, count: self.__colorTableCount * components)
     self.__unsafeGetColorTable(&table)
     return table
   }
@@ -227,11 +228,14 @@ public extension CGPoint {
   }
 }
 
-extension CGPoint : CustomReflectable, CustomPlaygroundQuickLookable {
+extension CGPoint : CustomReflectable {
   public var customMirror: Mirror {
     return Mirror(self, children: ["x": x, "y": y], displayStyle: .`struct`)
   }
+}
 
+extension CGPoint : _CustomPlaygroundQuickLookable {
+  @available(*, deprecated, message: "CGPoint.customPlaygroundQuickLook will be removed in a future Swift version")
   public var customPlaygroundQuickLook: PlaygroundQuickLook {
     return .point(Double(x), Double(y))
   }
@@ -247,6 +251,21 @@ extension CGPoint : Equatable {
   @_transparent // @fragile
   public static func == (lhs: CGPoint, rhs: CGPoint) -> Bool {
     return lhs.x == rhs.x  &&  lhs.y == rhs.y
+  }
+}
+
+extension CGPoint : Codable {
+  public init(from decoder: Decoder) throws {
+    var container = try decoder.unkeyedContainer()
+    let x = try container.decode(CGFloat.self)
+    let y = try container.decode(CGFloat.self)
+    self.init(x: x, y: y)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.unkeyedContainer()
+    try container.encode(x)
+    try container.encode(y)
   }
 }
 
@@ -276,14 +295,17 @@ public extension CGSize {
   }
 }
 
-extension CGSize : CustomReflectable, CustomPlaygroundQuickLookable {
+extension CGSize : CustomReflectable {
   public var customMirror: Mirror {
     return Mirror(
       self,
       children: ["width": width, "height": height],
       displayStyle: .`struct`)
   }
+}
 
+extension CGSize : _CustomPlaygroundQuickLookable {
+  @available(*, deprecated, message: "CGSize.customPlaygroundQuickLook will be removed in a future Swift version")
   public var customPlaygroundQuickLook: PlaygroundQuickLook {
     return .size(Double(width), Double(height))
   }
@@ -299,6 +321,21 @@ extension CGSize : Equatable {
   @_transparent // @fragile
   public static func == (lhs: CGSize, rhs: CGSize) -> Bool {
     return lhs.width == rhs.width  &&  lhs.height == rhs.height
+  }
+}
+
+extension CGSize : Codable {
+  public init(from decoder: Decoder) throws {
+    var container = try decoder.unkeyedContainer()
+    let width = try container.decode(CGFloat.self)
+    let height = try container.decode(CGFloat.self)
+    self.init(width: width, height: height)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.unkeyedContainer()
+    try container.encode(width)
+    try container.encode(height)
   }
 }
 
@@ -329,6 +366,21 @@ extension CGVector : Equatable {
 extension CGVector : CustomDebugStringConvertible {
   public var debugDescription : String {
     return "(\(dx), \(dy))"
+  }
+}
+
+extension CGVector : Codable {
+  public init(from decoder: Decoder) throws {
+    var container = try decoder.unkeyedContainer()
+    let dx = try container.decode(CGFloat.self)
+    let dy = try container.decode(CGFloat.self)
+    self.init(dx: dx, dy: dy)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.unkeyedContainer()
+    try container.encode(dx)
+    try container.encode(dy)
   }
 }
 
@@ -383,14 +435,17 @@ public extension CGRect {
   public var y: CGFloat { return minY }
 }
 
-extension CGRect : CustomReflectable, CustomPlaygroundQuickLookable {
+extension CGRect : CustomReflectable {
   public var customMirror: Mirror {
     return Mirror(
       self,
       children: ["origin": origin, "size": size],
       displayStyle: .`struct`)
   }
+}
 
+extension CGRect : _CustomPlaygroundQuickLookable {
+  @available(*, deprecated, message: "CGRect.customPlaygroundQuickLook will be removed in a future Swift version")
   public var customPlaygroundQuickLook: PlaygroundQuickLook {
     return .rectangle(
       Double(origin.x), Double(origin.y),
@@ -411,11 +466,49 @@ extension CGRect : Equatable {
   }
 }
 
+extension CGRect : Codable {
+  public init(from decoder: Decoder) throws {
+    var container = try decoder.unkeyedContainer()
+    let origin = try container.decode(CGPoint.self)
+    let size = try container.decode(CGSize.self)
+    self.init(origin: origin, size: size)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.unkeyedContainer()
+    try container.encode(origin)
+    try container.encode(size)
+  }
+}
+
 extension CGAffineTransform {
   public static var identity: CGAffineTransform {
    @_transparent // @fragile
    get { return CGAffineTransform(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0) }
  }
+}
+
+extension CGAffineTransform : Codable {
+  public init(from decoder: Decoder) throws {
+    var container = try decoder.unkeyedContainer()
+    let a = try container.decode(CGFloat.self)
+    let b = try container.decode(CGFloat.self)
+    let c = try container.decode(CGFloat.self)
+    let d = try container.decode(CGFloat.self)
+    let tx = try container.decode(CGFloat.self)
+    let ty = try container.decode(CGFloat.self)
+    self.init(a: a, b: b, c: c, d: d, tx: tx, ty: ty)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.unkeyedContainer()
+    try container.encode(a)
+    try container.encode(b)
+    try container.encode(c)
+    try container.encode(d)
+    try container.encode(tx)
+    try container.encode(ty)
+  }
 }
 
 //===----------------------------------------------------------------------===//

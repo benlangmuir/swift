@@ -20,10 +20,12 @@
 #ifndef SWIFT_MIGRATOR_EDITORADAPTER_H
 #define SWIFT_MIGRATOR_EDITORADAPTER_H
 
+#include "swift/Migrator/Replacement.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Edit/Commit.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallSet.h"
 
 namespace swift {
 
@@ -44,6 +46,12 @@ class EditorAdapter {
   /// This is marked mutable because it is lazily populated internally
   /// in the `getClangFileIDForSwiftBufferID` method below.
   mutable llvm::SmallDenseMap<unsigned, clang::FileID> SwiftToClangBufferMap;
+
+  /// Tracks a history of edits outside of the clang::edit::Commit collector
+  /// below. That doesn't handle duplicate or redundant changes.
+  mutable llvm::SmallSet<Replacement, 32> Replacements;
+
+  bool CacheEnabled;
 
   /// A running transactional collection of basic edit operations.
   /// Clang uses this transaction concept to cancel a batch of edits due to
@@ -66,10 +74,17 @@ class EditorAdapter {
   clang::CharSourceRange
   translateCharSourceRange(CharSourceRange SwiftSourceSourceRange) const;
 
+  /// Returns the buffer ID and absolute offset for a Swift SourceLoc.
+  std::pair<unsigned, unsigned> getLocInfo(swift::SourceLoc Loc) const;
+
+  /// Returns true if the replacement has already been booked. Otherwise,
+  /// returns false and adds it to the replacement set.
+  bool cacheReplacement(CharSourceRange Range, StringRef Text) const;
+
 public:
   EditorAdapter(swift::SourceManager &SwiftSrcMgr,
                 clang::SourceManager &ClangSrcMgr)
-    : SwiftSrcMgr(SwiftSrcMgr), ClangSrcMgr(ClangSrcMgr),
+    : SwiftSrcMgr(SwiftSrcMgr), ClangSrcMgr(ClangSrcMgr), CacheEnabled(true),
       Edits(clang::edit::Commit(ClangSrcMgr, clang::LangOptions())) {}
 
   /// Lookup the BufferID in the SwiftToClangBufferMap. If it doesn't exist,
@@ -115,6 +130,8 @@ public:
   const clang::edit::Commit &getEdits() const {
     return Edits;
   }
+  void enableCache() { CacheEnabled = true; }
+  void disableCache() { CacheEnabled = false; }
 };
 
 } // end namespace migrator

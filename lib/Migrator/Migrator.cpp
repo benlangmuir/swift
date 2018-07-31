@@ -9,6 +9,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/Basic/Diff.h"
 #include "swift/Frontend/Frontend.h"
 #include "swift/Migrator/ASTMigratorPass.h"
 #include "swift/Migrator/EditorAdapter.h"
@@ -25,17 +26,26 @@
 using namespace swift;
 using namespace swift::migrator;
 
-bool migrator::updateCodeAndEmitRemap(CompilerInstance *Instance,
-                                      const CompilerInvocation &Invocation) {
+bool migrator::updateCodeAndEmitRemapIfNeeded(
+    CompilerInstance *Instance, const CompilerInvocation &Invocation) {
+  if (!Invocation.getMigratorOptions().shouldRunMigrator())
+    return false;
+
+  // Delete the remap file, in case someone is re-running the Migrator. If the
+  // file fails to compile and we don't get a chance to overwrite it, the old
+  // changes may get picked up.
+  llvm::sys::fs::remove(Invocation.getMigratorOptions().EmitRemapFilePath);
+
   Migrator M { Instance, Invocation }; // Provide inputs and configuration
+  auto EffectiveVersion = Invocation.getLangOptions().EffectiveLanguageVersion;
+  auto CurrentVersion = version::Version::getCurrentLanguageVersion();
 
   // Phase 1: Pre Fix-it passes
   // These uses the initial frontend invocation to apply any obvious fix-its
   // to see if we can get an error-free AST to get to Phase 2.
   std::unique_ptr<swift::CompilerInstance> PreFixItInstance;
   if (Instance->getASTContext().hadError()) {
-    PreFixItInstance = M.repeatFixitMigrations(2,
-      Invocation.getLangOptions().EffectiveLanguageVersion);
+    PreFixItInstance = M.repeatFixitMigrations(2, EffectiveVersion);
 
     // If we still couldn't fix all of the errors, give up.
     if (PreFixItInstance == nullptr ||
@@ -47,9 +57,12 @@ bool migrator::updateCodeAndEmitRemap(CompilerInstance *Instance,
   }
 
   // Phase 2: Syntactic Transformations
-  auto FailedSyntacticPasses = M.performSyntacticPasses();
-  if (FailedSyntacticPasses) {
-    return true;
+  // Don't run these passes if we're already in newest Swift version.
+  if (EffectiveVersion != CurrentVersion) {
+    auto FailedSyntacticPasses = M.performSyntacticPasses();
+    if (FailedSyntacticPasses) {
+      return true;
+    }
   }
 
   // Phase 3: Post Fix-it Passes
@@ -61,7 +74,7 @@ bool migrator::updateCodeAndEmitRemap(CompilerInstance *Instance,
 
   if (M.getMigratorOptions().EnableMigratorFixits) {
     M.repeatFixitMigrations(Migrator::MaxCompilerFixitPassIterations,
-                            {4, 0, 0});
+                            CurrentVersion);
   }
 
   // OK, we have a final resulting text. Now we compare against the input
@@ -105,49 +118,46 @@ Migrator::repeatFixitMigrations(const unsigned Iterations,
 std::unique_ptr<swift::CompilerInstance>
 Migrator::performAFixItMigration(version::Version SwiftLanguageVersion) {
   auto InputState = States.back();
+  auto InputText = InputState->getOutputText();
   auto InputBuffer =
-    llvm::MemoryBuffer::getMemBufferCopy(InputState->getOutputText(),
-                                         getInputFilename());
+    llvm::MemoryBuffer::getMemBufferCopy(InputText, getInputFilename());
 
   CompilerInvocation Invocation { StartInvocation };
-  Invocation.clearInputs();
+  Invocation.getFrontendOptions().InputsAndOutputs.clearInputs();
   Invocation.getLangOptions().EffectiveLanguageVersion = SwiftLanguageVersion;
+  auto &LLVMArgs = Invocation.getFrontendOptions().LLVMArgs;
+  auto aarch64_use_tbi = std::find(LLVMArgs.begin(), LLVMArgs.end(),
+                                   "-aarch64-use-tbi");
+  if (aarch64_use_tbi != LLVMArgs.end()) {
+    LLVMArgs.erase(aarch64_use_tbi);
+  }
 
-  // SE-0160: When migrating, always use the Swift 3 @objc inference rules,
-  // which drives warnings with the "@objc" Fix-Its.
-  Invocation.getLangOptions().EnableSwift3ObjCInference = true;
+  if (StartInvocation.getLangOptions().EffectiveLanguageVersion.isVersion3()) {
+    // SE-0160: When migrating, always use the Swift 3 @objc inference rules,
+    // which drives warnings with the "@objc" Fix-Its.
+    Invocation.getLangOptions().EnableSwift3ObjCInference = true;
 
-  // The default behavior of the migrator, referred to as "minimal" migration
-  // in SE-0160, only adds @objc Fix-Its to those cases where the Objective-C
-  // entry point is explicitly used somewhere in the source code. The user
-  // may also select a workflow that adds @objc for every declaration that
-  // would infer @objc under the Swift 3 rules but would no longer infer
-  // @objc in Swift 4.
-  Invocation.getLangOptions().WarnSwift3ObjCInference =
-    getMigratorOptions().KeepObjcVisibility
-      ? Swift3ObjCInferenceWarnings::Complete
-      : Swift3ObjCInferenceWarnings::Minimal;
+    // The default behavior of the migrator, referred to as "minimal" migration
+    // in SE-0160, only adds @objc Fix-Its to those cases where the Objective-C
+    // entry point is explicitly used somewhere in the source code. The user
+    // may also select a workflow that adds @objc for every declaration that
+    // would infer @objc under the Swift 3 rules but would no longer infer
+    // @objc in Swift 4.
+    Invocation.getLangOptions().WarnSwift3ObjCInference =
+      getMigratorOptions().KeepObjcVisibility
+        ? Swift3ObjCInferenceWarnings::Complete
+        : Swift3ObjCInferenceWarnings::Minimal;
+  }
 
   const auto &OrigFrontendOpts = StartInvocation.getFrontendOptions();
 
-  auto InputBuffers = OrigFrontendOpts.InputBuffers;
-  auto InputFilenames = OrigFrontendOpts.InputFilenames;
-
-  for (const auto &Buffer : InputBuffers) {
-    Invocation.addInputBuffer(Buffer);
+  assert(OrigFrontendOpts.InputsAndOutputs.hasPrimaryInputs() &&
+         "Migration must have a primary");
+  for (const auto &input : OrigFrontendOpts.InputsAndOutputs.getAllInputs()) {
+    Invocation.getFrontendOptions().InputsAndOutputs.addInput(
+        InputFile(input.file(), input.isPrimary(),
+                  input.isPrimary() ? InputBuffer.get() : input.buffer()));
   }
-
-  for (const auto &Filename : InputFilenames) {
-    Invocation.addInputFilename(Filename);
-  }
-
-  const unsigned PrimaryIndex =
-    Invocation.getFrontendOptions().InputBuffers.size();
-
-  Invocation.addInputBuffer(InputBuffer.get());
-  Invocation.getFrontendOptions().PrimaryInput = {
-    PrimaryIndex, SelectedInput::InputKind::Buffer
-  };
 
   auto Instance = llvm::make_unique<swift::CompilerInstance>();
   if (Instance->setup(Invocation)) {
@@ -155,14 +165,14 @@ Migrator::performAFixItMigration(version::Version SwiftLanguageVersion) {
   }
 
   FixitApplyDiagnosticConsumer FixitApplyConsumer {
-    InputState->getOutputText(),
+    InputText,
     getInputFilename(),
   };
   Instance->addDiagnosticConsumer(&FixitApplyConsumer);
 
   Instance->performSema();
 
-  StringRef ResultText = InputState->getOutputText();
+  StringRef ResultText = InputText;
   unsigned ResultBufferID = InputState->getOutputBufferID();
 
   if (FixitApplyConsumer.getNumFixitsApplied() > 0) {
@@ -233,10 +243,166 @@ bool Migrator::performSyntacticPasses() {
   return false;
 }
 
+namespace {
+/// Print a replacement from a diff edit scriptto the given output stream.
+///
+/// \param Filename The filename of the original file
+/// \param Rep The Replacement to print
+/// \param OS The output stream
+void printReplacement(const StringRef Filename,
+                      const Replacement &Rep,
+                      llvm::raw_ostream &OS) {
+  assert(!Filename.empty());
+  if (Rep.Remove == 0 && Rep.Text.empty()) {
+    return;
+  }
+  OS << "  {\n";
+
+  OS << "    \"file\": \"";
+  OS.write_escaped(Filename);
+  OS << "\",\n";
+
+  OS << "    \"offset\": " << Rep.Offset;
+  if (Rep.Remove > 0) {
+    OS << ",\n";
+    OS << "    \"remove\": " << Rep.Remove;
+  }
+  if (!Rep.Text.empty()) {
+    OS << ",\n";
+    OS << "    \"text\": \"";
+    OS.write_escaped(Rep.Text);
+    OS << "\"\n";
+  } else {
+    OS << "\n";
+  }
+  OS << "  }";
+}
+
+/// Print a remap file to the given output stream.
+///
+/// \param OriginalFilename The filename of the file that was edited
+/// not the output file for printing here.
+/// \param InputText The input text without any changes.
+/// \param OutputText The result text after any changes.
+/// \param OS The output stream.
+void printRemap(const StringRef OriginalFilename,
+                const StringRef InputText,
+                const StringRef OutputText,
+                llvm::raw_ostream &OS) {
+  assert(!OriginalFilename.empty());
+
+  diff_match_patch<std::string> DMP;
+  const auto Diffs = DMP.diff_main(InputText, OutputText, /*checkLines=*/false);
+
+  OS << "[";
+
+  size_t Offset = 0;
+
+  llvm::SmallVector<Replacement, 32> Replacements;
+
+  for (const auto &Diff : Diffs) {
+    size_t OffsetIncrement = 0;
+    switch (Diff.operation) {
+      case decltype(DMP)::EQUAL:
+        OffsetIncrement += Diff.text.size();
+        break;
+      case decltype(DMP)::INSERT:
+        Replacements.push_back({ Offset, 0, Diff.text });
+        break;
+      case decltype(DMP)::DELETE:
+        Replacements.push_back({ Offset, Diff.text.size(), "" });
+        OffsetIncrement = Diff.text.size();
+        break;
+    }
+    Offset += OffsetIncrement;
+  }
+
+  assert(Offset == InputText.size());
+
+  // Combine removal edits with previous edits that are consecutive.
+  for (unsigned i = 1; i < Replacements.size();) {
+    auto &Previous = Replacements[i-1];
+    auto &Current = Replacements[i];
+    assert(Current.Offset >= Previous.Offset + Previous.Remove);
+    unsigned Distance = Current.Offset-(Previous.Offset + Previous.Remove);
+    if (Distance > 0) {
+      ++i;
+      continue;
+    }
+    if (!Current.Text.empty()) {
+      ++i;
+      continue;
+    }
+    Previous.Remove += Current.Remove;
+    Replacements.erase(Replacements.begin() + i);
+  }
+
+  // Combine removal edits with next edits that are consecutive.
+  for (unsigned i = 0; i + 1 < Replacements.size();) {
+    auto &Current = Replacements[i];
+    auto &nextRep = Replacements[i + 1];
+    assert(nextRep.Offset >= Current.Offset + Current.Remove);
+    unsigned Distance = nextRep.Offset - (Current.Offset + Current.Remove);
+    if (Distance > 0) {
+      ++i;
+      continue;
+    }
+    if (!Current.Text.empty()) {
+      ++i;
+      continue;
+    }
+    nextRep.Offset -= Current.Remove;
+    nextRep.Remove += Current.Remove;
+    Replacements.erase(Replacements.begin() + i);
+  }
+
+  // For remaining removal diffs, include the byte adjacent to the range on the
+  // left. libclang applies the diffs as byte diffs, so it doesn't matter if the
+  // byte is part of a multi-byte UTF8 character.
+  for (unsigned i = 0; i < Replacements.size(); ++i) {
+    auto &Current = Replacements[i];
+    if (!Current.Text.empty())
+      continue;
+    if (Current.Offset == 0)
+      continue;
+    Current.Offset -= 1;
+    Current.Remove += 1;
+    Current.Text = InputText.substr(Current.Offset, 1);
+  }
+
+  for (auto Rep = Replacements.begin(); Rep != Replacements.end(); ++Rep) {
+    if (Rep != Replacements.begin()) {
+      OS << ",\n";
+    } else {
+      OS << "\n";
+    }
+    printReplacement(OriginalFilename, *Rep, OS);
+  }
+
+  OS << "\n]";
+}
+
+} // end anonymous namespace
+
 bool Migrator::emitRemap() const {
-  // TODO: Need to integrate diffing library to diff start and end state's
-  // output text.
-  return false;
+  const auto &RemapPath = getMigratorOptions().EmitRemapFilePath;
+  if (RemapPath.empty()) {
+    return false;
+  }
+
+  std::error_code Error;
+  llvm::raw_fd_ostream FileOS(RemapPath,
+                              Error, llvm::sys::fs::F_Text);
+  if (FileOS.has_error()) {
+    return true;
+  }
+
+  auto InputText = States.front()->getOutputText();
+  auto OutputText = States.back()->getOutputText();
+  printRemap(getInputFilename(), InputText, OutputText, FileOS);
+
+  FileOS.flush();
+  return FileOS.has_error();
 }
 
 bool Migrator::emitMigratedFile() const {
@@ -278,7 +444,7 @@ const MigratorOptions &Migrator::getMigratorOptions() const {
 }
 
 const StringRef Migrator::getInputFilename() const {
-  auto PrimaryInput =
-    StartInvocation.getFrontendOptions().PrimaryInput.getValue();
-  return StartInvocation.getInputFilenames()[PrimaryInput.Index];
+  auto &PrimaryInput = StartInvocation.getFrontendOptions()
+                           .InputsAndOutputs.getRequiredUniquePrimaryInput();
+  return PrimaryInput.file();
 }

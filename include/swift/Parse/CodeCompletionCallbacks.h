@@ -34,15 +34,11 @@ class CodeCompletionCallbacks {
 protected:
   Parser &P;
   ASTContext &Context;
-  Parser::ParserPosition ExprBeginPosition;
+  ParserPosition ExprBeginPosition;
 
   /// The declaration parsed during delayed parsing that was caused by code
   /// completion. This declaration contained the code completion token.
-  Decl *DelayedParsedDecl = nullptr;
-
-  /// If code completion is done inside a controlling expression of a C-style
-  /// for loop statement, this is the declaration of the iteration variable.
-  Decl *CStyleForLoopIterationVariable = nullptr;
+  Decl *ParsedDecl = nullptr;
 
   /// True if code completion is done inside a raw value expression of an enum
   /// case.
@@ -69,38 +65,20 @@ public:
     return CompleteExprSelectorContext != ObjCSelectorContext::None;
   }
 
-  void setExprBeginning(Parser::ParserPosition PP) {
+  void setExprBeginning(ParserPosition PP) {
     ExprBeginPosition = PP;
   }
 
-  void setDelayedParsedDecl(Decl *D) {
-    DelayedParsedDecl = D;
+  /// Set the decl inside which the code-completion occurred.  This is used when
+  /// completing inside a parameter list or where clause where the Parser's
+  /// CurDeclContext will not be where we want to perform lookup.
+  void setParsedDecl(Decl *D) {
+    ParsedDecl = D;
   }
 
   void setLeadingSequenceExprs(ArrayRef<Expr *> exprs) {
     leadingSequenceExprs.assign(exprs.begin(), exprs.end());
   }
-
-  class InCStyleForExprRAII {
-    CodeCompletionCallbacks *Callbacks;
-
-  public:
-    InCStyleForExprRAII(CodeCompletionCallbacks *Callbacks,
-                        Decl *IterationVariable)
-        : Callbacks(Callbacks) {
-      if (Callbacks)
-        Callbacks->CStyleForLoopIterationVariable = IterationVariable;
-    }
-
-    void finished() {
-      if (Callbacks)
-        Callbacks->CStyleForLoopIterationVariable = nullptr;
-    }
-
-    ~InCStyleForExprRAII() {
-      finished();
-    }
-  };
 
   class InEnumElementRawValueRAII {
     CodeCompletionCallbacks *Callbacks;
@@ -150,6 +128,10 @@ public:
   /// \brief Complete the beginning of expr-postfix -- no tokens provided
   /// by user.
   virtual void completePostfixExprBeginning(CodeCompletionExpr *E) = 0;
+
+  /// \brief Complete the beginning of expr-postfix in a for-each loop sequqence
+  /// -- no tokens provided by user.
+  virtual void completeForEachSequenceBeginning(CodeCompletionExpr *E) = 0;
 
   /// \brief Complete a given expr-postfix.
   virtual void completePostfixExpr(Expr *E, bool hasSpace) = 0;
@@ -218,7 +200,17 @@ public:
 
   virtual void completeReturnStmt(CodeCompletionExpr *E) = 0;
 
+  /// Complete a yield statement.  A missing yield index means that the
+  /// completion immediately follows the 'yield' keyword; it may be either
+  /// an expresion or a parenthesized expression list.  A present yield
+  /// index means that the completion is within the parentheses and is
+  /// for a specific yield value.
+  virtual void completeYieldStmt(CodeCompletionExpr *E,
+                                 Optional<unsigned> yieldIndex) = 0;
+
   virtual void completeAfterPound(CodeCompletionExpr *E, StmtKind ParentKind) = 0;
+
+  virtual void completeAfterIfStmt(bool hasElse) = 0;
 
   virtual void completeGenericParams(TypeLoc TL) = 0;
 

@@ -18,6 +18,7 @@
 #include "swift/Sema/SourceLoader.h"
 #include "swift/Subsystems.h"
 #include "swift/AST/DiagnosticsSema.h"
+#include "swift/AST/Module.h"
 #include "swift/Parse/DelayedParsingCallbacks.h"
 #include "swift/Parse/PersistentParserState.h"
 #include "swift/Basic/SourceManager.h"
@@ -131,7 +132,9 @@ ModuleDecl *SourceLoader::loadModule(SourceLoc importLoc,
     implicitImportKind = SourceFile::ImplicitModuleImportKind::None;
 
   auto *importFile = new (Ctx) SourceFile(*importMod, SourceFileKind::Library,
-                                          bufferID, implicitImportKind);
+                                          bufferID, implicitImportKind,
+                                          Ctx.LangOpts.CollectParsedToken,
+                                          Ctx.LangOpts.BuildSyntaxTree);
   importMod->addFile(*importFile);
 
   bool done;
@@ -152,6 +155,7 @@ ModuleDecl *SourceLoader::loadModule(SourceLoc importLoc,
   else
     performTypeChecking(*importFile, persistentState.getTopLevelContext(),
                         None);
+  importMod->setHasResolvedImports();
   return importMod;
 }
 

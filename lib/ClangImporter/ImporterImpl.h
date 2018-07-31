@@ -28,8 +28,8 @@
 #include "swift/AST/Module.h"
 #include "swift/AST/Type.h"
 #include "swift/AST/ForeignErrorConvention.h"
+#include "swift/Basic/FileTypes.h"
 #include "swift/Basic/StringExtras.h"
-#include "swift/Strings.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/Basic/IdentifierTable.h"
@@ -108,8 +108,8 @@ enum class ImportTypeKind {
   /// \brief Import the type of a literal value.
   Value,
 
-  /// \brief Import the type of a literal value that can be bridged.
-  BridgedValue,
+  /// \brief Import the type of an Objective-C generic argument.
+  ObjCCollectionElement,
 
   /// \brief Import the declared type of a variable.
   Variable,
@@ -180,6 +180,31 @@ enum class ImportTypeKind {
   /// This provides special treatment for 'NSUInteger'.
   Enum
 };
+
+enum class Bridgeability {
+  /// This context does not permit bridging at all.  For example, the
+  /// target of a C pointer.
+  None,
+
+  /// This context permits all kinds of bridging.  For example, the
+  /// imported result of a method declaration.
+  Full
+};
+
+/// Controls whether a typedef for \p type should name the fully-bridged Swift
+/// type or the original Clang type.
+///
+/// In either case we end up losing sugar at some uses sites, so this is more
+/// about what the right default is.
+static inline Bridgeability getTypedefBridgeability(
+                                          const clang::TypedefNameDecl *decl,
+                                          clang::QualType type) {
+    return decl->hasAttr<clang::SwiftBridgedTypedefAttr>()
+      ? Bridgeability::Full
+        : type->isBlockPointerType()
+        ? Bridgeability::Full
+          : Bridgeability::None;
+}
 
 /// \brief Describes the kind of the C type that can be mapped to a stdlib
 /// swift type.
@@ -256,9 +281,48 @@ private:
 
 using LookupTableMap = llvm::StringMap<std::unique_ptr<SwiftLookupTable>>;
 
+/// The result of importing a clang type. It holds both the Swift Type
+/// as well as a bool in which 'true' indicates either:
+///   This is an Optional type.
+///   This is a function type where the result type is an Optional.
+/// It is otherwise 'false'.
+class ImportedType {
+  Type type;
+  bool isIUO;
+
+public:
+  ImportedType() {
+    type = Type();
+    isIUO = false;
+  }
+
+  ImportedType(Type ty, bool implicitlyUnwrap)
+      : type(ty), isIUO(implicitlyUnwrap) {
+#if !defined(NDEBUG)
+    if (implicitlyUnwrap) {
+      assert(ty->getOptionalObjectType() || ty->getAs<AnyFunctionType>());
+      if (!ty->getOptionalObjectType()) {
+        auto fnTy = ty->castTo<AnyFunctionType>();
+        assert(fnTy->getResult()->getOptionalObjectType());
+      }
+    }
+#endif
+  }
+
+  Type getType() const { return type; }
+
+  bool isImplicitlyUnwrapped() const { return isIUO; }
+
+  // Allow a direct test in boolean contexts. It makes sense to base
+  // this entirely on the type as the isIUO is meaningless for a null
+  // type.
+  explicit operator bool() const { return type.getPointer() != nullptr; }
+};
+
 /// \brief Implementation of the Clang importer.
 class LLVM_LIBRARY_VISIBILITY ClangImporter::Implementation 
-  : public LazyMemberLoader
+  : public LazyMemberLoader,
+    public LazyConformanceLoader
 {
   friend class ClangImporter;
   using Version = importer::ImportNameVersion;
@@ -278,7 +342,6 @@ public:
 
   bool IsReadingBridgingPCH;
   llvm::SmallVector<clang::serialization::SubmoduleID, 2> PCHImportedSubmodules;
-  llvm::SmallVector<const clang::Module*, 2> DeferredHeaderImports;
 
   const Version CurrentVersion;
 
@@ -300,13 +363,19 @@ private:
 
   /// \brief The fake buffer used to import modules.
   ///
-  /// FIXME: Horrible hack for loadModule().
-  clang::FileID DummyImportBuffer;
+  /// \see getNextIncludeLoc
+  clang::FileID DummyIncludeBuffer;
 
   /// \brief A count of the number of load module operations.
   ///
-  /// FIXME: Horrible, horrible hack for \c loadModule().
-  unsigned ImportCounter = 0;
+  /// \see getNextIncludeLoc
+  unsigned IncludeCounter = 0;
+
+  /// Generate a dummy Clang source location for header includes and module
+  /// imports.
+  ///
+  /// These have to be unique and valid or Clang gets very confused.
+  clang::SourceLocation getNextIncludeLoc();
 
   /// \brief Used to avoid running the AST verifier over the same declarations.
   size_t VerifiedDeclsCounter = 0;
@@ -375,7 +444,8 @@ public:
   /// Multiple macro definitions can map to the same declaration if the
   /// macros are identically defined.
   llvm::DenseMap<Identifier,
-                 SmallVector<std::pair<clang::MacroInfo *, ValueDecl *>, 2>>
+                 SmallVector<std::pair<const clang::MacroInfo *, ValueDecl *>,
+                             2>>
     ImportedMacros;
 
   // Mapping from macro to value for macros that expand to constant values.
@@ -470,7 +540,7 @@ public:
   ClangModuleUnit *ImportedHeaderUnit = nullptr;
 
   /// The modules re-exported by imported headers.
-  llvm::SmallVector<ModuleDecl::ImportedModule, 8> ImportedHeaderExports;
+  llvm::SmallVector<clang::Module *, 8> ImportedHeaderExports;
 
   /// The modules that requested imported headers.
   ///
@@ -493,14 +563,6 @@ private:
   /// Records those modules that we have looked up.
   llvm::DenseMap<Identifier, ModuleDecl *> checkedModules;
 
-  /// External Decls that we have imported but not passed to the ASTContext yet.
-  SmallVector<Decl *, 4> RegisteredExternalDecls;
-
-  /// Protocol conformances that may be missing witnesses.
-  SmallVector<NormalProtocolConformance *, 4> DelayedProtocolConformances;
-
-  unsigned NumCurrentImportingEntities = 0;
-
   /// Mapping from delayed conformance IDs to the set of delayed
   /// protocol conformances.
   llvm::DenseMap<unsigned, SmallVector<ProtocolConformance *, 4>>
@@ -515,20 +577,6 @@ private:
     ImportedProtocols;
 
   void startedImportingEntity();
-  void finishedImportingEntity();
-  void finishPendingActions();
-  void finishProtocolConformance(NormalProtocolConformance *conformance);
-
-  struct ImportingEntityRAII {
-    Implementation &Impl;
-
-    ImportingEntityRAII(Implementation &Impl) : Impl(Impl) {
-      Impl.startedImportingEntity();
-    }
-    ~ImportingEntityRAII() {
-      Impl.finishedImportingEntity();
-    }
-  };
 
 public:
   importer::PlatformAvailability platformAvailability;
@@ -564,11 +612,33 @@ public:
 
 public:
   void registerExternalDecl(Decl *D) {
-    RegisteredExternalDecls.push_back(D);
+    if (!hasFinishedTypeChecking())
+      SwiftContext.addExternalDecl(D);
   }
 
-  void scheduleFinishProtocolConformance(NormalProtocolConformance *C) {
-    DelayedProtocolConformances.push_back(C);
+  void recordImplicitUnwrapForDecl(Decl *decl, bool isIUO) {
+#if !defined(NDEBUG)
+    Type ty;
+    if (auto *FD = dyn_cast<FuncDecl>(decl)) {
+      assert(FD->getInterfaceType());
+      ty = FD->getResultInterfaceType();
+    } else if (auto *CD = dyn_cast<ConstructorDecl>(decl)) {
+      assert(CD->getInterfaceType());
+      ty = CD->getResultInterfaceType();
+    } else {
+      ty = cast<AbstractStorageDecl>(decl)->getValueInterfaceType()
+                                          ->getReferenceStorageReferent();
+    }
+#endif
+
+    if (!isIUO)
+      return;
+
+    assert(ty->getOptionalObjectType());
+
+    auto *IUOAttr = new (SwiftContext)
+        ImplicitlyUnwrappedOptionalAttr(/* implicit= */ true);
+    decl->getAttrs().add(IUOAttr);
   }
 
   /// \brief Retrieve the Clang AST context.
@@ -606,10 +676,7 @@ public:
   ///
   /// The returned module may be null (but not \c None) if \p MI comes from
   /// an imported header.
-  Optional<clang::Module *>
-  getClangSubmoduleForMacro(const clang::MacroInfo *MI);
-
-  ClangModuleUnit *getClangModuleForMacro(const clang::MacroInfo *MI);
+  const clang::Module *getClangOwningModule(ClangNode Node) const;
 
   /// Whether NSUInteger can be imported as Int in certain contexts. If false,
   /// should always be imported as UInt.
@@ -634,7 +701,9 @@ public:
 
   /// Print an imported name as a string suitable for the swift_name attribute,
   /// or the 'Rename' field of AvailableAttr.
-  void printSwiftName(importer::ImportedName, bool fullyQualified,
+  void printSwiftName(importer::ImportedName name,
+                      importer::ImportNameVersion version,
+                      bool fullyQualified,
                       llvm::raw_ostream &os);
 
   /// \brief Import the given Clang identifier into Swift.
@@ -667,9 +736,11 @@ public:
 
   /// \brief Import the given Clang preprocessor macro as a Swift value decl.
   ///
+  /// \p macroNode must be a MacroInfo or a ModuleMacro.
+  ///
   /// \returns The imported declaration, or null if the macro could not be
   /// translated into Swift.
-  ValueDecl *importMacro(Identifier name, clang::MacroInfo *macro);
+  ValueDecl *importMacro(Identifier name, ClangNode macroNode);
 
   /// Map a Clang identifier name to its imported Swift equivalent.
   StringRef getSwiftNameFromClangName(StringRef name);
@@ -884,9 +955,12 @@ public:
   /// \brief Retrieve the NSCopying protocol type.
   Type getNSCopyingType();
 
+  /// \brief Retrieve a sugared referenece to the given (imported) type.
+  Type getSugaredTypeReference(TypeDecl *type);
+
   /// \brief Determines whether the given type matches an implicit type
   /// bound of "Hashable", which is used to validate NSDictionary/NSSet.
-  bool matchesNSObjectBound(Type type);
+  bool matchesHashableBound(Type type);
 
   /// \brief Look up and attempt to import a Clang declaration with
   /// the given name.
@@ -896,23 +970,72 @@ public:
   ///
   /// \param type The Clang type to import.
   ///
-  /// \param kind The kind of type import we're performing.
+  /// \param kind A classification of the immediate context in which this type
+  ///   will be used. Different contexts result in the type being imported
+  ///   differently; for example, CF types are normally considered Unmanaged,
+  ///   but in parameter position they are known to always be passed at +0.
+  ///   See also the \p topLevelBridgeability parameter.
   ///
   /// \param allowNSUIntegerAsInt If true, NSUInteger will be imported as Int
-  ///        in certain contexts. If false, it will always be imported as UInt.
+  ///   in certain contexts. If false, it will always be imported as UInt.
   ///
-  /// \param canFullyBridgeTypes True if we can bridge types losslessly.
-  ///        This is an additional guarantee on top of the ImportTypeKind
-  ///        cases that allow bridging, and applies to the entire type.
+  /// \param topLevelBridgeability A classification of the top-level context in
+  ///   which this type will be used. This and \p kind are used together to
+  ///   determine whether a type can be imported in a more Swifty way than
+  ///   a naive translation of its C type. Full bridgeability requires that SIL
+  ///   can get back to the original Clang type if it needs to, which implies
+  ///   that this type is part of a top-level declaration where we do bridging.
+  ///   Without full bridgeability, we can still do some Swifty importing (e.g.
+  ///   mapping NSString to String) if we're in an immediate context \p kind
+  ///   that allows bridging, but only in cases where Swift's default mapping
+  ///   "back" to C is the correct one. If the original type has something
+  ///   funny going on, we either have to use a less lossy version of the type
+  ///   (ObjCBool rather than Bool) or refuse to import it at all (a block with
+  ///   the \c ns_returns_retained attribute).
   ///
-  /// \returns The imported type, or null if this type could
-  /// not be represented in Swift.
-  Type importType(clang::QualType type,
-                  ImportTypeKind kind,
-                  bool allowNSUIntegerAsInt,
-                  bool canFullyBridgeTypes,
-                  OptionalTypeKind optional = OTK_ImplicitlyUnwrappedOptional,
-                  bool resugarNSErrorPointer = true);
+  /// \param optional If the imported type was a pointer-like type in C, this
+  ///   optionality is applied to the resulting Swift type.
+  ///
+  /// \param resugarNSErrorPointer If true, Objective-C's `NSError **` is
+  ///   imported as Foundation.NSErrorPointer rather than
+  ///   AutoreleasingUnsafeMutablePointer<...>. This is usually desirable
+  ///   behavior, but isn't necessary when we use Swift's \c throws anyway.
+  ///   Strictly speaking, though, this is a hack used to break cyclic
+  ///   dependencies.
+  ///
+  /// \returns An ImportedType value which holds the imported type. If
+  ///          this type is an Optional, it also has a flag which
+  ///          indicates if the Optional is implicitly unwrapped. If
+  ///          the type cannot be represented in Swift, then the type
+  ///          field will be null.
+  ImportedType
+  importType(clang::QualType type, ImportTypeKind kind,
+             bool allowNSUIntegerAsInt, Bridgeability topLevelBridgeability,
+             OptionalTypeKind optional = OTK_ImplicitlyUnwrappedOptional,
+             bool resugarNSErrorPointer = true);
+
+  /// \brief Import the given Clang type into Swift.
+  ///
+  /// For a description of parameters, see importType(). This differs
+  /// only in that it returns a Type rather than ImportedType, which
+  /// means that we do not retain the information of whether the type
+  /// returned might be an implicitly unwrapped optional.
+  ///
+  /// \returns The imported type, or null if this type could not be
+  ///   represented in Swift.
+  Type importTypeIgnoreIUO(
+      clang::QualType type, ImportTypeKind kind, bool allowNSUIntegerAsInt,
+      Bridgeability topLevelBridgeability,
+      OptionalTypeKind optional = OTK_ImplicitlyUnwrappedOptional,
+      bool resugarNSErrorPointer = true);
+
+  /// \brief Import the given Clang type into Swift, returning the
+  /// Swift type and whether we should treat it as an optional that is
+  /// implicitly unwrapped.
+  ///
+  /// \returns A pair of the imported type and whether we should treat
+  /// it as an optional that is implicitly unwrapped. The returned
+  /// type is null if it cannot be represented in Swift.
 
   /// \brief Import the given function type.
   ///
@@ -933,13 +1056,11 @@ public:
   ///
   /// \returns the imported function type, or null if the type cannot be
   /// imported.
-  Type importFunctionType(DeclContext *dc,
-                          const clang::FunctionDecl *clangDecl,
-                          ArrayRef<const clang::ParmVarDecl *> params,
-                          bool isVariadic,
-                          bool isFromSystemModule,
-                          DeclName name,
-                          ParameterList *&parameterList);
+  ImportedType importFunctionType(DeclContext *dc,
+                                  const clang::FunctionDecl *clangDecl,
+                                  ArrayRef<const clang::ParmVarDecl *> params,
+                                  bool isVariadic, bool isFromSystemModule,
+                                  DeclName name, ParameterList *&parameterList);
 
   /// \brief Import the given function return type.
   ///
@@ -951,9 +1072,9 @@ public:
   ///
   /// \returns the imported function return type, or null if the type cannot be
   /// imported.
-  Type importFunctionReturnType(DeclContext *dc,
-                                const clang::FunctionDecl *clangDecl,
-                                bool allowNSUIntegerAsInt);
+  ImportedType importFunctionReturnType(DeclContext *dc,
+                                        const clang::FunctionDecl *clangDecl,
+                                        bool allowNSUIntegerAsInt);
 
   /// \brief Import the parameter list for a function
   ///
@@ -973,14 +1094,14 @@ public:
                               bool isVariadic, bool allowNSUIntegerAsInt,
                               ArrayRef<Identifier> argNames);
 
-  Type importPropertyType(const clang::ObjCPropertyDecl *clangDecl,
-                          bool isFromSystemModule);
+  ImportedType importPropertyType(const clang::ObjCPropertyDecl *clangDecl,
+                                  bool isFromSystemModule);
 
   /// Attempt to infer a default argument for a parameter with the
   /// given Clang \c type, \c baseName, and optionality.
   static DefaultArgumentKind
   inferDefaultArgument(clang::QualType type, OptionalTypeKind clangOptionality,
-                       Identifier baseName, unsigned numParams,
+                       DeclBaseName baseName, unsigned numParams,
                        StringRef argumentLabel, bool isFirstParameter,
                        bool isLastParameter, importer::NameImporter &);
 
@@ -1004,15 +1125,14 @@ public:
   ///
   /// \returns the imported function type, or null if the type cannot be
   /// imported.
-  Type importMethodType(const DeclContext *dc,
-                        const clang::ObjCMethodDecl *clangDecl,
-                        ArrayRef<const clang::ParmVarDecl *> params,
-                        bool isVariadic,
-                        bool isFromSystemModule,
-                        ParameterList **bodyParams,
-                        importer::ImportedName importedName,
-                        Optional<ForeignErrorConvention> &errorConvention,
-                        SpecialMethodKind kind);
+  ImportedType
+  importMethodType(const DeclContext *dc,
+                   const clang::ObjCMethodDecl *clangDecl,
+                   ArrayRef<const clang::ParmVarDecl *> params, bool isVariadic,
+                   bool isFromSystemModule, ParameterList **bodyParams,
+                   importer::ImportedName importedName,
+                   Optional<ForeignErrorConvention> &errorConvention,
+                   SpecialMethodKind kind);
 
   /// Import the type of an Objective-C method that will be imported as an
   /// accessor for \p property.
@@ -1029,12 +1149,12 @@ public:
   ///
   /// \returns the imported function type, or null if the type cannot be
   /// imported.
-  Type importAccessorMethodType(const DeclContext *dc,
-                                const clang::ObjCPropertyDecl *property,
-                                const clang::ObjCMethodDecl *clangDecl,
-                                bool isFromSystemModule,
-                                importer::ImportedName importedName,
-                                ParameterList **params);
+  ImportedType importAccessorMethodType(const DeclContext *dc,
+                                        const clang::ObjCPropertyDecl *property,
+                                        const clang::ObjCMethodDecl *clangDecl,
+                                        bool isFromSystemModule,
+                                        importer::ImportedName importedName,
+                                        ParameterList **params);
 
   /// \brief Determine whether the given typedef-name is "special", meaning
   /// that it has performed some non-trivial mapping of its underlying type
@@ -1110,13 +1230,54 @@ public:
   virtual void
   loadAllMembers(Decl *D, uint64_t unused) override;
 
+  virtual Optional<TinyPtrVector<ValueDecl *>>
+  loadNamedMembers(const IterableDeclContext *IDC, DeclBaseName N,
+                   uint64_t contextData) override;
+
+private:
+  void
+  loadAllMembersOfObjcContainer(Decl *D,
+                                const clang::ObjCContainerDecl *objcContainer);
+  void collectMembersToAdd(const clang::ObjCContainerDecl *objcContainer,
+                           Decl *D, DeclContext *DC,
+                           SmallVectorImpl<Decl *> &members);
+  void insertMembersAndAlternates(const clang::NamedDecl *nd,
+                                  SmallVectorImpl<Decl *> &members);
+  void loadAllMembersIntoExtension(Decl *D, uint64_t extra);
+
+  /// Imports \p decl under \p nameVersion with the name \p newName, and adds
+  /// it and its alternates to \p ext.
+  ///
+  /// \returns true if \p decl was successfully imported, whether or not it was
+  /// ultimately added to \p ext. This matches the behavior of
+  /// forEachDistinctName's callback.
+  bool addMemberAndAlternatesToExtension(
+      clang::NamedDecl *decl, importer::ImportedName newName,
+      importer::ImportNameVersion nameVersion, ExtensionDecl *ext);
+
+public:
   void
   loadAllConformances(
     const Decl *D, uint64_t contextData,
     SmallVectorImpl<ProtocolConformance *> &Conformances) override;
 
+  void finishNormalConformance(NormalProtocolConformance *conformance,
+                               uint64_t unused) override;
+  
+  /// Returns the default definition type for \p ATD.
+  TypeLoc loadAssociatedTypeDefault(const AssociatedTypeDecl *ATD,
+                                            uint64_t contextData) override {
+    llvm_unreachable("unimplemented for ClangImporter");
+  }
+  
+  /// Returns the generic environment.
+  virtual GenericEnvironment *loadGenericEnvironment(const DeclContext *decl,
+                                                     uint64_t contextData) override {
+    llvm_unreachable("unimplemented for ClangImporter");
+  }
+
   template <typename DeclTy, typename ...Targs>
-  DeclTy *createDeclWithClangNode(ClangNode ClangN, Accessibility access,
+  DeclTy *createDeclWithClangNode(ClangNode ClangN, AccessLevel access,
                                   Targs &&... Args) {
     assert(ClangN);
     void *DeclPtr = allocateMemoryForDecl<DeclTy>(SwiftContext, sizeof(DeclTy),
@@ -1124,11 +1285,11 @@ public:
     auto D = ::new (DeclPtr) DeclTy(std::forward<Targs>(Args)...);
     D->setClangNode(ClangN);
     D->setEarlyAttrValidation(true);
-    D->setAccessibility(access);
+    D->setAccess(access);
     if (auto ASD = dyn_cast<AbstractStorageDecl>(D))
-      ASD->setSetterAccessibility(access);
+      ASD->setSetterAccess(access);
     // All imported decls are constructed fully validated.
-    D->setValidationStarted();
+    D->setValidationToChecked();
     if (auto AFD = dyn_cast<AbstractFunctionDecl>(static_cast<Decl *>(D)))
       AFD->setNeedsNewVTableEntry(false);
     return D;
@@ -1168,7 +1329,8 @@ public:
                             VisibleDeclConsumer &consumer);
 
   /// Determine the effective Clang context for the given Swift nominal type.
-  EffectiveClangContext getEffectiveClangContext(NominalTypeDecl *nominal);
+  EffectiveClangContext
+  getEffectiveClangContext(const NominalTypeDecl *nominal);
 
   /// Attempts to import the name of \p decl with each possible
   /// ImportNameVersion. \p action will be called with each unique name.
@@ -1180,12 +1342,17 @@ public:
   /// will eventually reference that declaration, the contexts will still be
   /// considered distinct.
   ///
-  /// The names are generated in the same order as
-  /// forEachImportNameVersionFromCurrent. The current name is always first.
+  /// If \p action returns false, the current name will \e not be added to the
+  /// set of seen names.
+  ///
+  /// The active name is always first, followed by the other names in the order
+  /// of ImportNameVersion::forEachOtherImportNameVersion.
   void forEachDistinctName(
       const clang::NamedDecl *decl,
-      llvm::function_ref<void(importer::ImportedName,
-                              importer::ImportNameVersion)> action);
+      llvm::function_ref<bool(importer::ImportedName,
+                              importer::ImportNameVersion)> action) {
+    getNameImporter().forEachDistinctImportName(decl, CurrentVersion, action);
+  }
 
   /// Dump the Swift-specific name lookup tables we generate.
   void dumpSwiftLookupTables();
@@ -1193,7 +1360,7 @@ public:
   void setSinglePCHImport(Optional<std::string> PCHFilename) {
     if (PCHFilename.hasValue()) {
       assert(llvm::sys::path::extension(PCHFilename.getValue())
-                 .endswith(PCH_EXTENSION) &&
+                 .endswith(file_types::getExtension(file_types::TY_PCH)) &&
              "Single PCH imported filename doesn't have .pch extension!");
     }
     SinglePCHImport = PCHFilename;
@@ -1213,6 +1380,10 @@ namespace importer {
 
 /// Whether we should suppress the import of the given Clang declaration.
 bool shouldSuppressDeclImport(const clang::Decl *decl);
+
+/// Identifies certain UIKit constants that used to have overlay equivalents,
+/// but are now renamed using the swift_name attribute.
+bool isSpecialUIKitStructZeroProperty(const clang::NamedDecl *decl);
 
 /// Finds a particular kind of nominal by looking through typealiases.
 template <typename T>

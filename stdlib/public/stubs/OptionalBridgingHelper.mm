@@ -54,7 +54,7 @@ static Lazy<SwiftNullSentinelCache> Sentinels;
 static id getSentinelForDepth(unsigned depth) {
   // For unnested optionals, use NSNull.
   if (depth == 1)
-    return (id)kCFNull;
+    return id_const_cast(kCFNull);
   // Otherwise, make up our own sentinel.
   // See if we created one for this depth.
   auto &theSentinels = Sentinels.get();
@@ -88,7 +88,7 @@ static id getSentinelForDepth(unsigned depth) {
 
 /// Return the sentinel object to use to represent `nil` for a given Optional
 /// type.
-SWIFT_RUNTIME_STDLIB_INTERFACE SWIFT_CC(swift)
+SWIFT_RUNTIME_STDLIB_API SWIFT_CC(swift)
 id _swift_Foundation_getOptionalNilSentinelObject(const Metadata *Wrapped) {
   // Figure out the depth of optionality we're working with.
   unsigned depth = 1;
