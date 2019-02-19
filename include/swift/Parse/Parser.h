@@ -736,8 +736,8 @@ public:
 
   /// Parse a comma separated list of some elements.
   ParserStatus parseList(tok RightK, SourceLoc LeftLoc, SourceLoc &RightLoc,
-                         bool AllowSepAfterLast, Diag<> ErrorDiag,
-                         syntax::SyntaxKind Kind,
+                         bool AllowSepAfterLast, bool AllowSepOmission, 
+                         Diag<> ErrorDiag, syntax::SyntaxKind Kind,
                          llvm::function_ref<ParserStatus()> callback);
 
   void consumeTopLevelDecl(ParserPosition BeginParserPosition,
@@ -1340,6 +1340,7 @@ public:
   ParserStatus parseExprList(tok leftTok, tok rightTok,
                              bool isPostfix,
                              bool isExprBasic,
+                             bool allowSepOmission,
                              SourceLoc &leftLoc,
                              SmallVectorImpl<Expr *> &exprs,
                              SmallVectorImpl<Identifier> &exprLabels,

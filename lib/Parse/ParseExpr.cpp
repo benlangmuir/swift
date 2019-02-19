@@ -923,6 +923,7 @@ ParserResult<Expr> Parser::parseExprSuper(bool isExprBasic) {
 
     ParserStatus status = parseExprList(tok::l_square, tok::r_square,
                                         /*isPostfix=*/true, isExprBasic,
+                                        /*allowSepOmission=*/true,
                                         lSquareLoc, indexArgs, indexArgLabels,
                                         indexArgLabelLocs,
                                         rSquareLoc,
@@ -1240,9 +1241,9 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
 
       ParserStatus status = parseExprList(
           tok::l_square, tok::r_square,
-          /*isPostfix=*/true, isExprBasic, lSquareLoc, indexArgs,
-          indexArgLabels, indexArgLabelLocs, rSquareLoc, trailingClosure,
-          SyntaxKind::FunctionCallArgumentList);
+          /*isPostfix=*/true, isExprBasic, /*allowSepOmission=*/true, 
+          lSquareLoc, indexArgs, indexArgLabels, indexArgLabelLocs, rSquareLoc, 
+          trailingClosure, SyntaxKind::FunctionCallArgumentList);
       Result = makeParserResult(
           status | Result,
           SubscriptExpr::create(Context, Result.get(), lSquareLoc, indexArgs,
@@ -1649,6 +1650,7 @@ ParserResult<Expr> Parser::parseExprPrimary(Diag<> ID, bool isExprBasic) {
       
       ParserStatus status = parseExprList(tok::l_paren, tok::r_paren,
                                           /*isPostfix=*/true, isExprBasic,
+                                          /*allowSepOmission=*/false,
                                           lParenLoc, args, argLabels,
                                           argLabelLocs,
                                           rParenLoc,
@@ -1898,6 +1900,7 @@ parseStringSegments(SmallVectorImpl<Lexer::StringSegment> &Segments,
       ParserStatus S =
           parseExprList(tok::l_paren, tok::r_paren,
                         /*isPostfix=*/false, /*isExprBasic=*/true,
+                        /*allowSepOmission=*/false,
                         lParen, args, argLabels, argLabelLocs, rParen,
                         trailingClosureNeverPresent,
                         SyntaxKind::Unknown);
@@ -2987,6 +2990,7 @@ Parser::parseExprList(tok leftTok, tok rightTok, SyntaxKind Kind) {
   SourceLoc leftLoc, rightLoc;
   ParserStatus status = parseExprList(leftTok, rightTok, /*isPostfix=*/false,
                                       /*isExprBasic=*/true,
+                                      /*allowSepOmission=*/false,
                                       leftLoc,
                                       subExprs,
                                       subExprNames,
@@ -3023,6 +3027,7 @@ Parser::parseExprList(tok leftTok, tok rightTok, SyntaxKind Kind) {
 ParserStatus Parser::parseExprList(tok leftTok, tok rightTok,
                                    bool isPostfix,
                                    bool isExprBasic,
+                                   bool allowSepOmission,
                                    SourceLoc &leftLoc,
                                    SmallVectorImpl<Expr *> &exprs,
                                    SmallVectorImpl<Identifier> &exprLabels,
@@ -3041,6 +3046,7 @@ ParserStatus Parser::parseExprList(tok leftTok, tok rightTok,
   leftLoc = consumeToken(leftTok);
   ParserStatus status = parseList(rightTok, leftLoc, rightLoc,
                                   /*AllowSepAfterLast=*/false,
+                                  /*AllowSepOmission=*/allowSepOmission,
                                   rightTok == tok::r_paren
                                     ? diag::expected_rparen_expr_list
                                     : diag::expected_rsquare_expr_list,
@@ -3182,6 +3188,7 @@ Parser::parseExprObjectLiteral(ObjectLiteralExpr::LiteralKind LitKind,
 
   ParserStatus status = parseExprList(tok::l_paren, tok::r_paren,
                                       /*isPostfix=*/true, isExprBasic,
+                                      /*allowSepOmission=*/false,
                                       lParenLoc, args, argLabels,
                                       argLabelLocs,
                                       rParenLoc,
@@ -3225,8 +3232,9 @@ ParserResult<Expr> Parser::parseExprPoundUnknown(SourceLoc LSquareLoc) {
     // Parse arguments.
     ParserStatus status =
         parseExprList(tok::l_paren, tok::r_paren,
-                      /*isPostfix=*/false, /*isExprBasic*/ false, LParenLoc,
-                      args, argLabels, argLabelLocs, RParenLoc, trailingClosure,
+                      /*isPostfix=*/false, /*isExprBasic*/ false, 
+                      /*allowSepOmission=*/false, LParenLoc, args, argLabels,
+                      argLabelLocs, RParenLoc, trailingClosure,
                       SyntaxKind::FunctionCallArgumentList);
     if (status.hasCodeCompletion())
       return makeParserCodeCompletionResult<Expr>();
@@ -3339,6 +3347,7 @@ Parser::parseExprCallSuffix(ParserResult<Expr> fn, bool isExprBasic) {
 
   ParserStatus status = parseExprList(tok::l_paren, tok::r_paren,
                                       /*isPostfix=*/true, isExprBasic,
+                                      /*allowSepOmission=*/false,
                                       lParenLoc, args, argLabels,
                                       argLabelLocs,
                                       rParenLoc,
@@ -3452,6 +3461,9 @@ ParserResult<Expr> Parser::parseExprCollection() {
       if (Tok.isAtStartOfLine() && (Tok.isAny(tok::r_brace, tok::pound_endif) ||
                                     isStartOfDecl() || isStartOfStmt()))
         break;
+
+    if (Tok.isAtStartOfLine())
+        continue;
 
       diagnose(Tok, diag::expected_separator, ",")
           .fixItInsertAfter(PreviousLoc, ",");
