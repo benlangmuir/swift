@@ -18,10 +18,10 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Frontend/CompilerInstance.h"
-#include "clang/Frontend/PCHContainerOperations.h"
 #include "clang/Frontend/TextDiagnosticBuffer.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Serialization/ASTReader.h"
+#include "clang/Serialization/PCHContainerOperations.h"
 
 using namespace swift;
 
